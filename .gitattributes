@@ -1,0 +1,17 @@
+# Одна политика для всех платформ: в репозитории LF, рабочая копия
+# подбирается под ОС автоматически
+* text=auto
+
+# Скрипты Windows исполняются с LF без проблем — нормализуем и их
+*.cmd text
+*.ps1 text
+
+# Бинарники не нормализуются
+*.png binary
+*.zip binary
+*.zxp binary
+*.msi binary
+*.ffx binary
+*.prproj binary
+*.ico binary
+*.exe binary

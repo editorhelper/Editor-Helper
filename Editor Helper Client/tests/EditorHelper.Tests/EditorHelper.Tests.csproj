@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <AssemblyName>EditorHelper.Tests</AssemblyName>
+    <RootNamespace>EditorHelper.Tests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\EditorHelper.csproj" />
+  </ItemGroup>
+
+  <!-- LocalCatalogProvider ищет каталог рядом с exe — тестам нужна своя копия -->
+  <ItemGroup>
+    <Content Include="..\..\Data\**\*.*" LinkBase="Data" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

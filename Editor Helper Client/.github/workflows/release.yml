@@ -1,0 +1,96 @@
+name: Release
+
+# Публикация новой версии: сборка установщика, контрольная сумма,
+# GitHub Release. Запускается ТОЛЬКО тегом vX.Y.Z — обычный коммит
+# ничего не публикует.
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  # Минимум для публикации: содержимое репозитория (создание релиза).
+  # Никаких write в packages, deploy и прочее
+  contents: write
+
+jobs:
+  release:
+    name: Build installer & publish release
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Setup Inno Setup
+        shell: pwsh
+        run: |
+          $iscc = @(
+            "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+            "$env:ProgramFiles\Inno Setup 6\ISCC.exe",
+            "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe"
+          ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $iscc) {
+            winget install --id JRSoftware.InnoSetup --silent --accept-package-agreements --accept-source-agreements
+          }
+          $iscc = @(
+            "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+            "$env:ProgramFiles\Inno Setup 6\ISCC.exe",
+            "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe"
+          ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $iscc) { throw "Inno Setup 6 not found after install" }
+          "ISCC=$iscc" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      # Тесты перед релизом: сломанную версию публиковать нельзя
+      - name: Client tests
+        run: dotnet run --project tests/EditorHelper.Tests/EditorHelper.Tests.csproj --nologo
+
+      - name: Server tests
+        run: dotnet run --project "Editor Helper Server/tests/EditorHelper.Server.Tests/EditorHelper.Server.Tests.csproj" --nologo
+
+      # Версия читается из csproj и сверяется с тегом: рассинхрон
+      # дал бы релиз с установщиком не той версии
+      - name: Verify tag matches project version
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}" -replace '^v', ''
+          $csproj = Select-String -Path EditorHelper.csproj -Pattern '<Version>(.+?)</Version>' | Select-Object -First 1
+          $version = $csproj.Matches[0].Groups[1].Value
+          if ($tag -ne $version) {
+            throw "Tag v$tag does not match project version $version. Update <Version> in EditorHelper.csproj."
+          }
+          "RELEASE_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Build payload
+        shell: cmd
+        run: Release\publish.cmd
+
+      - name: Build installer
+        shell: cmd
+        run: Release\installer.cmd
+
+      - name: Compute checksum
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem "Release\output\EditorHelper-Setup-*.exe" | Select-Object -First 1
+          $hash = (Get-FileHash $exe.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          # Файл суммы публикуется рядом с установщиком: клиент ищет
+          # вложение с именем "<установщик>.sha256" и сверяет хеш
+          "$hash  $($exe.Name)" | Out-File -FilePath "$($exe.FullName).sha256" -Encoding ascii
+          Write-Host "SHA256: $hash"
+          "SETUP_FILE=$($exe.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "SETUP_NAME=$($exe.Name)" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          # Предрелиз помечается вручную: бета-тег (v1.2.3-beta.1) не
+          # проверяется автоматически, флаг ставится при создании тега
+          # через gh release create --prerelease
+          files: |
+            ${{ env.SETUP_FILE }}
+            ${{ env.SETUP_FILE }}.sha256
+          generate_release_notes: true
+          fail_on_unmatched_files: true

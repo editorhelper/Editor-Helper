@@ -1,0 +1,98 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <AssemblyName>EditorHelper</AssemblyName>
+    <RootNamespace>EditorHelper</RootNamespace>
+    <Version>0.3.0</Version>
+    <Product>Editor Helper</Product>
+    <Company>Editor Helper</Company>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <ApplicationIcon>Resources\app.ico</ApplicationIcon>
+  </PropertyGroup>
+
+  <!-- Иконка приложения генерируется из avatar.png при сборке: ICO в git не
+       хранится, чтобы не расползались бинарники. Таргет запускается до
+       компиляции, поэтому файл существует к моменту, когда csproj ссылается
+       на него -->
+  <Target Name="GenerateAppIcon" BeforeTargets="BeforeBuild"
+          Condition="!Exists('Resources\app.ico')">
+    <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File Release\make-icon.ps1"
+          WorkingDirectory="$(MSBuildThisFileDirectory)" />
+  </Target>
+
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <!-- Детерминированная сборка: путь до папки проекта не зашивается в IL,
+         поэтому одинаковый исходный код даёт побайтово одинаковую сборку на
+         любой машине. PDB в релиз не кладём — он не нужен пользователю -->
+    <DebugType>none</DebugType>
+    <DebugSymbols>false</DebugSymbols>
+    <Deterministic>true</Deterministic>
+    <PathMap>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)'))=_</PathMap>
+  </PropertyGroup>
+
+  <!--
+    Каталог и файлы ресурсов лежат рядом с exe, а не внутри него:
+    так каталог можно править, не пересобирая приложение.
+
+    Демонстрационные данные нужны только в разработке и в тестах. В релизную
+    сборку они не попадают: пользователь должен видеть настоящий каталог
+    с сервера, а не шесть учебных карточек.
+  -->
+  <ItemGroup Condition="'$(Configuration)' != 'Release'">
+    <Content Include="Data\**\*.*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Resource Include="Resources\avatar.png" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Remove="tests\**" />
+    <None Remove="tests\**" />
+    <Page Remove="tests\**" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
+  </ItemGroup>
+
+  <!--
+    Значения по умолчанию для свежего запуска, когда settings.json ещё нет.
+    В разработке каталог читается из локальной папки Data; в релизе этой папки
+    нет, поэтому сборка сразу смотрит на сервер. Адрес задаётся свойством
+    EhDefaultApiBaseUrl — его подставляет релизный скрипт (Release\publish.cmd),
+    а не хранит в коде: адрес не секрет, но менять его пересборкой неудобно.
+  -->
+  <PropertyGroup>
+    <EhDefaultCatalogSource Condition="'$(Configuration)' == 'Release'">remote</EhDefaultCatalogSource>
+    <EhDefaultCatalogSource Condition="'$(EhDefaultCatalogSource)' == ''">local</EhDefaultCatalogSource>
+    <EhDefaultApiBaseUrl Condition="'$(EhDefaultApiBaseUrl)' == ''">http://127.0.0.1:5080</EhDefaultApiBaseUrl>
+  </PropertyGroup>
+
+  <!-- Без Inputs/Outputs: файл добавляется в @(Compile) самим таргетом, и если
+       бы таргет пропускался на инкрементальной сборке, тип BuildDefaults
+       не попал бы в компиляцию -->
+  <Target Name="GenerateReleaseDefaults" BeforeTargets="CoreCompile">
+    <!-- Точки с запятой экранированы как %3B: в MSBuild это разделитель
+         элементов списка, и без экранирования они не дошли бы до файла -->
+    <ItemGroup>
+      <_DefaultLines Include="namespace EditorHelper.Services%3B" />
+      <_DefaultLines Include="/// &lt;summary&gt;Значения по умолчанию, подставленные при сборке.&lt;/summary&gt;" />
+      <_DefaultLines Include="internal static class BuildDefaults" />
+      <_DefaultLines Include="{" />
+      <_DefaultLines Include="    public const string CatalogSource = &quot;$(EhDefaultCatalogSource)&quot;%3B" />
+      <_DefaultLines Include="    public const string ApiBaseUrl = &quot;$(EhDefaultApiBaseUrl)&quot;%3B" />
+      <_DefaultLines Include="}" />
+    </ItemGroup>
+    <WriteLinesToFile File="$(IntermediateOutputPath)BuildDefaults.g.cs" Lines="@(_DefaultLines)" Overwrite="true" Encoding="utf-8" />
+    <ItemGroup>
+      <Compile Include="$(IntermediateOutputPath)BuildDefaults.g.cs" />
+    </ItemGroup>
+  </Target>
+
+</Project>

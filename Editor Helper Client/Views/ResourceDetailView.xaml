@@ -1,0 +1,322 @@
+<UserControl x:Class="EditorHelper.Views.ResourceDetailView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             TextOptions.TextFormattingMode="Ideal"
+             UseLayoutRounding="True"
+             SnapsToDevicePixels="True">
+
+    <Grid>
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <!-- Заголовок с возвратом в каталог -->
+            <Border Grid.Row="0"
+                    Background="{StaticResource BgSecondary}"
+                    BorderBrush="{StaticResource Divider}"
+                    BorderThickness="1"
+                    CornerRadius="14"
+                    Padding="20,18">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+
+                    <Button x:Name="BackButton"
+                            Grid.Column="0"
+                            Content="&#xE72B;"
+                            FontFamily="Segoe MDL2 Assets"
+                            Style="{StaticResource GlassButtonSmall}"
+                            Padding="12,9"
+                            Margin="0,0,16,0"
+                            VerticalAlignment="Center"
+                            Click="BackButton_Click"
+                            ToolTip="Назад в каталог"/>
+
+                    <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                        <TextBlock x:Name="TitleText"
+                                   FontSize="26"
+                                   FontWeight="Light"
+                                   Foreground="{StaticResource TextPrimary}"
+                                   TextWrapping="Wrap"/>
+                        <TextBlock x:Name="AuthorText"
+                                   FontSize="13"
+                                   Foreground="{StaticResource TextSecondary}"
+                                   Margin="0,6,0,0"/>
+                    </StackPanel>
+                </Grid>
+            </Border>
+
+            <!-- Содержимое -->
+            <ScrollViewer Grid.Row="1"
+                          VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Disabled"
+                          Margin="0,18,0,0">
+                <StackPanel x:Name="ContentPanel" Margin="4,0,10,16">
+                    <!-- Метаданные -->
+                    <WrapPanel Margin="0,0,0,26">
+                        <Border x:Name="TypeBadge"
+                                Background="{StaticResource Glass}"
+                                BorderBrush="{StaticResource GlassBorder}"
+                                BorderThickness="1"
+                                CornerRadius="999"
+                                Padding="12,6"
+                                Margin="0,0,10,8">
+                            <TextBlock x:Name="TypeText"
+                                       FontSize="12"
+                                       FontWeight="Medium"
+                                       Foreground="{StaticResource TextPrimary}"/>
+                        </Border>
+
+                        <Border x:Name="AppBadge"
+                                Background="{StaticResource Glass}"
+                                BorderBrush="{StaticResource GlassBorder}"
+                                BorderThickness="1"
+                                CornerRadius="999"
+                                Padding="12,6"
+                                Margin="0,0,10,8">
+                            <TextBlock x:Name="AppText"
+                                       FontSize="12"
+                                       Foreground="{StaticResource TextSecondary}"/>
+                        </Border>
+
+                        <Border Background="{StaticResource Glass}"
+                                BorderBrush="{StaticResource GlassBorder}"
+                                BorderThickness="1"
+                                CornerRadius="999"
+                                Padding="12,6"
+                                Margin="0,0,0,8">
+                            <TextBlock x:Name="VersionText"
+                                       FontSize="12"
+                                       Foreground="{StaticResource TextSecondary}"/>
+                        </Border>
+                    </WrapPanel>
+
+                    <!-- Описание -->
+                    <TextBlock Text="Description"
+                               FontSize="18"
+                               FontWeight="SemiBold"
+                               Foreground="{StaticResource TextPrimary}"
+                               Margin="0,0,0,12"/>
+                    <TextBlock x:Name="DescriptionText"
+                               FontSize="14"
+                               Foreground="{StaticResource TextSecondary}"
+                               TextWrapping="Wrap"
+                               LineHeight="22"
+                               Margin="0,0,0,32"/>
+
+                    <!-- Возможности (полное описание) -->
+                    <TextBlock x:Name="FeaturesHeader"
+                               Text="Features"
+                               FontSize="18"
+                               FontWeight="SemiBold"
+                               Foreground="{StaticResource TextPrimary}"
+                               Margin="0,0,0,12"/>
+                    <TextBlock x:Name="FeaturesText"
+                               FontSize="14"
+                               Foreground="{StaticResource TextSecondary}"
+                               TextWrapping="Wrap"
+                               LineHeight="22"
+                               Margin="0,0,0,32"/>
+
+                    <!-- Сведения -->
+                    <TextBlock Text="Details"
+                               FontSize="18"
+                               FontWeight="SemiBold"
+                               Foreground="{StaticResource TextPrimary}"
+                               Margin="0,0,0,12"/>
+                    <Border Background="{StaticResource CardSurface}"
+                            BorderBrush="{StaticResource GlassBorder}"
+                            BorderThickness="1"
+                            CornerRadius="14"
+                            Padding="20"
+                            Margin="0,0,0,32">
+                        <StackPanel x:Name="DetailsPanel"/>
+                    </Border>
+
+                    <!-- Теги -->
+                    <TextBlock x:Name="TagsHeader"
+                               Text="Tags"
+                               FontSize="18"
+                               FontWeight="SemiBold"
+                               Foreground="{StaticResource TextPrimary}"
+                               Margin="0,0,0,12"/>
+                    <WrapPanel x:Name="TagsPanel" Margin="0,0,0,8"/>
+                </StackPanel>
+            </ScrollViewer>
+
+            <!-- Действия -->
+            <Border Grid.Row="2"
+                    Background="{StaticResource BgSecondary}"
+                    BorderBrush="{StaticResource Divider}"
+                    BorderThickness="0,1,0,0"
+                    Padding="0,16,0,0"
+                    Margin="0,16,0,0">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+
+                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                        <TextBlock x:Name="FileSizeText"
+                                   FontSize="13"
+                                   Foreground="{StaticResource TextMuted}"/>
+                        <TextBlock x:Name="StatusText"
+                                   FontSize="11.5"
+                                   Foreground="{StaticResource TextMuted}"
+                                   TextWrapping="Wrap"
+                                   MaxWidth="420"
+                                   Margin="0,2,0,0"/>
+                    </StackPanel>
+
+                    <Button x:Name="CancelButton"
+                            Grid.Column="1"
+                            Content="Cancel"
+                            Style="{StaticResource GlassButton}"
+                            Padding="20,9"
+                            Margin="0,0,10,0"
+                            Click="CancelButton_Click"
+                            Visibility="Collapsed"/>
+
+                    <Button x:Name="InstallButton"
+                            Grid.Column="2"
+                            Content="Install"
+                            Style="{StaticResource GlassButton}"
+                            Padding="20,9"
+                            Margin="0,0,10,0"
+                            Click="InstallButton_Click"
+                            Visibility="Collapsed"/>
+
+                    <Button x:Name="DownloadButton"
+                            Grid.Column="3"
+                            Content="Download"
+                            Style="{StaticResource PrimaryButton}"
+                            Padding="24,9"
+                            Margin="0,0,10,0"
+                            Click="DownloadButton_Click"/>
+
+                    <Button x:Name="FavoriteButton"
+                            Grid.Column="4"
+                            Content="♡"
+                            FontSize="18"
+                            Width="42"
+                            Height="38"
+                            Background="{StaticResource Glass}"
+                            Foreground="{StaticResource TextSecondary}"
+                            BorderBrush="{StaticResource GlassBorder}"
+                            BorderThickness="1"
+                            Cursor="Hand"
+                            Click="FavoriteButton_Click">
+                        <Button.Style>
+                            <Style TargetType="Button">
+                                <Setter Property="Template">
+                                    <Setter.Value>
+                                        <ControlTemplate TargetType="Button">
+                                            <Border x:Name="FB"
+                                                    Background="{TemplateBinding Background}"
+                                                    BorderBrush="{TemplateBinding BorderBrush}"
+                                                    BorderThickness="{TemplateBinding BorderThickness}"
+                                                    CornerRadius="10">
+                                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                            </Border>
+                                            <ControlTemplate.Triggers>
+                                                <Trigger Property="IsMouseOver" Value="True">
+                                                    <Setter TargetName="FB" Property="Background" Value="{StaticResource GlassHover}"/>
+                                                    <Setter TargetName="FB" Property="BorderBrush" Value="{StaticResource GlassBorderBright}"/>
+                                                </Trigger>
+                                            </ControlTemplate.Triggers>
+                                        </ControlTemplate>
+                                    </Setter.Value>
+                                </Setter>
+                            </Style>
+                        </Button.Style>
+                    </Button>
+                </Grid>
+            </Border>
+        </Grid>
+
+        <!-- Инструкция ручной установки: оверлей внутри страницы, без нового окна -->
+        <Border x:Name="InstructionsOverlay"
+                Background="#CC000000"
+                Visibility="Collapsed">
+            <Border Background="{StaticResource BgElevated}"
+                    BorderBrush="{StaticResource GlassBorderBright}"
+                    BorderThickness="1"
+                    CornerRadius="14"
+                    Padding="24"
+                    MaxWidth="620"
+                    MaxHeight="520"
+                    Margin="24"
+                    VerticalAlignment="Center"
+                    HorizontalAlignment="Center">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <TextBlock Grid.Row="0"
+                               Text="Manual Installation"
+                               FontSize="18"
+                               FontWeight="SemiBold"
+                               Foreground="{StaticResource TextPrimary}"
+                               Margin="0,0,0,10"/>
+
+                    <TextBlock x:Name="InstructionsSummary"
+                               Grid.Row="1"
+                               FontSize="13.5"
+                               Foreground="{StaticResource TextSecondary}"
+                               TextWrapping="Wrap"
+                               LineHeight="20"
+                               Margin="0,0,0,14"/>
+
+                    <TextBox x:Name="InstructionsBody"
+                             Grid.Row="2"
+                             IsReadOnly="True"
+                             TextWrapping="Wrap"
+                             AcceptsReturn="True"
+                             FontFamily="Consolas, Cascadia Mono, monospace"
+                             FontSize="12.5"
+                             Foreground="{StaticResource TextSecondary}"
+                             Background="{StaticResource BgSecondary}"
+                             BorderBrush="{StaticResource Divider}"
+                             BorderThickness="1"
+                             Padding="14"
+                             VerticalScrollBarVisibility="Auto"/>
+
+                    <WrapPanel Grid.Row="3"
+                               Orientation="Horizontal"
+                               HorizontalAlignment="Right"
+                               Margin="0,16,0,0">
+                        <Button x:Name="CopyInstructionsButton"
+                                Content="Copy instructions"
+                                Style="{StaticResource GlassButtonSmall}"
+                                Padding="16,9"
+                                Margin="0,0,10,8"
+                                Click="CopyInstructionsButton_Click"/>
+                        <Button Content="Open application folder"
+                                Style="{StaticResource GlassButtonSmall}"
+                                Padding="16,9"
+                                Margin="0,0,10,8"
+                                Click="OpenFolderButton_Click"/>
+                        <Button Content="Close"
+                                Style="{StaticResource PrimaryButton}"
+                                Padding="20,9"
+                                Margin="0,0,0,8"
+                                Click="CloseInstructionsButton_Click"/>
+                    </WrapPanel>
+                </Grid>
+            </Border>
+        </Border>
+    </Grid>
+</UserControl>

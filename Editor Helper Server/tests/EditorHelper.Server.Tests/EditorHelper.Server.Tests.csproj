@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <!-- net8.0-windows: тесты поднимают сервер в процессе и гоняют клиентский
+         DownloadService через HTTP, а клиентское приложение windows-only -->
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>EditorHelper.Server.Tests</AssemblyName>
+    <RootNamespace>EditorHelper.Server.Tests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\EditorHelper.Server\EditorHelper.Server.csproj" />
+    <ProjectReference Include="..\..\..\Editor Helper Client\EditorHelper.csproj" />
+  </ItemGroup>
+
+</Project>

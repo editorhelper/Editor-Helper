@@ -1,0 +1,46 @@
+# Сборка
+bin/
+obj/
+dist/
+TestOutput/
+
+# Релизные артефакты: воспроизводятся из кода, бинарники в git не нужны
+Release/payload/
+Release/publish/
+Release/output/
+Release/obfuscated/
+Release/_verify/
+*.exe.sha256
+
+# Данные сервера: каталог, обнаруженные документы, загруженные архивы, секреты.
+# Здесь лежат admin-token.txt и secrets.json с токеном бота — в git нельзя.
+server-data/
+*/server-data/
+
+# Файлы секретов где бы то ни было
+secrets.json
+admin-token.txt
+.env
+.env.local
+
+# Пользовательские данные клиента (появляются рядом с exe при портативном запуске)
+settings.json
+favorites.json
+downloads.json
+
+# Секреты устройства и сессии (DPAPI, привязаны к машине — в git нельзя)
+device.key
+session.bin
+
+# Обновления, скачанные приложением
+updates/
+
+# IDE
+.vs/
+.idea/
+*.user
+.vscode/
+
+# ОС
+Thumbs.db
+.DS_Store

@@ -121,24 +121,43 @@ Telegram integration against a fake Bot API — no network access required.
 
 ## How updates work
 
-1. **Check** — the app queries the public GitHub Releases API
-   (`releases/latest`, or `releases` for the Beta channel) over HTTPS. No
-   token, no authentication; publishing happens through GitHub Actions.
-2. **Compare** — semver comparison including prerelease suffixes; equal or
-   older versions are never offered.
-3. **Download** — the `EditorHelper-Setup-*.exe` asset streams to
-   `%LOCALAPPDATA%\EditorHelper\updates` with a real byte-accurate progress
-   bar.
-4. **Verify** — the release must include a `<installer>.exe.sha256` asset
+Update metadata is served by **your server**, not queried from GitHub
+directly by the client:
+
+1. **Check** — the app calls `GET /api/v1/updates/check?channel=stable|beta`
+   on the catalog server with its session. The server fetches release lists
+   from GitHub (public repo for Stable, a private repo for Beta) and decides
+   what the user may see.
+2. **Channel gate** — Beta metadata is only present in the response when the
+   account has the `is_beta_tester` flag, granted by the server Owner. A user
+   without the grant never receives beta versions, notes, or links — no
+   local setting can change that, the decision is server-side.
+3. **Compare** — numeric semver comparison including prerelease suffixes;
+   equal or older versions are never offered. A newer beta does not count as
+   an update for a stable-channel user.
+4. **Download** — the installer streams from the server
+   (`GET /api/v1/updates/download?channel=…&tag=…`), which proxies the
+   artifact from the release repository with server-side authorization, so
+   the GitHub token never reaches the client. Progress is byte-accurate.
+5. **Verify** — the release must include a `<installer>.exe.sha256` asset
    produced by the same CI run; the downloaded file is hashed and compared.
    A release without a checksum artifact is refused, and a mismatched hash
    deletes the file and aborts — the app keeps running the current version.
-5. **Install** — the verified installer is launched; Inno Setup closes the
+6. **Install** — the verified installer is launched; Inno Setup closes the
    running app, updates it, and offers to restart it. If anything fails
    before that, the app stays on the current version untouched.
 
-Beta channel: opt-in in Settings → Updates. Stable users only ever see final
-releases; prereleases reach only those who turned the switch on.
+Beta channel: opt-in in Settings → Updates for users with server-granted
+access. Revoking access immediately stops new beta updates for that user;
+the app then offers a return to the latest stable release.
+
+Server configuration (environment variables or `server-data/secrets.json`):
+
+| Variable | Meaning |
+|---|---|
+| `EDITORHELPER_STABLE_REPO` | `owner/repo` of the public stable releases |
+| `EDITORHELPER_BETA_REPO` | `owner/repo` of the private beta releases |
+| `EDITORHELPER_BETA_REPO_TOKEN` | fine-grained GitHub token, Contents: Read-only, scoped to the beta repo |
 
 ## Security
 
@@ -153,6 +172,10 @@ releases; prereleases reach only those who turned the switch on.
   machine.
 - The client never executes commands or scripts from release notes or
   remote metadata.
+- Beta update artifacts live in a **private** GitHub repository; the server
+  proxies them per-request with per-user authorization, so the read token
+  never enters the client and unauthorized users cannot fetch beta files
+  even with a direct URL.
 
 See [SECURITY.md](SECURITY.md) for reporting vulnerabilities.
 

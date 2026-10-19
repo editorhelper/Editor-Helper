@@ -7,6 +7,20 @@ semantic versioning.
 ## [Unreleased]
 
 ### Added
+- Two update channels with server-side gating: Stable for everyone, Beta only
+  for users granted the `is_beta_tester` flag by the server Owner. Beta
+  metadata and files are never sent to unauthorized users; the grant/revoke
+  is audited and takes effect immediately.
+- Update check and installer download now flow through the server
+  (`/api/v1/updates/check`, `/api/v1/updates/download`): the server reads
+  GitHub releases (public repo for Stable, private repo for Beta with a
+  read-only token) and authorizes every request per user.
+- Beta artifacts live in a separate private repository; beta-release workflow
+  publishes there with a scoped secret token.
+- Beta access management for the Owner: `/beta <Telegram ID> <on|off>` bot
+  command, inline buttons in the user card, and `PUT /admin/api/users/{id}/beta`.
+- Client: graceful return-to-stable path — when beta access is revoked and a
+  newer stable release exists, the updates page offers it explicitly.
 - Self-update from GitHub Releases: version check over HTTPS, release notes,
   installer download with byte-accurate progress, SHA-256 verification
   against the `.sha256` release asset, installer launch. Stable and Beta

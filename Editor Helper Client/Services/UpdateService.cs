@@ -6,43 +6,37 @@ using System.Text.Json.Serialization;
 
 namespace EditorHelper.Services;
 
-/// <summary>Релиз, найденный в GitHub Releases.</summary>
+/// <summary>Релиз, найденный через сервер обновлений.</summary>
 public sealed class UpdateRelease
 {
+    /// <summary>Тег релиза (v1.2.0 или v1.3.0-beta.1).</summary>
+    public string Tag { get; init; } = "";
+
     /// <summary>Версия, разобранная из тега: v1.2.0 -> 1.2.0.</summary>
     public string Version { get; init; } = "";
-
-    /// <summary>Сырой тег релиза (v1.2.0).</summary>
-    public string Tag { get; init; } = "";
 
     /// <summary>Название релиза.</summary>
     public string Title { get; init; } = "";
 
-    /// <summary>Описание изменений из Release Notes (тело релиза).</summary>
+    /// <summary>Описание изменений из Release Notes.</summary>
     public string Notes { get; init; } = "";
 
-    /// <summary>Страница релиза в браузере.</summary>
+    /// <summary>Страница релиза (для беты может отсутствовать — релиз приватный).</summary>
     public string HtmlUrl { get; init; } = "";
 
     /// <summary>Предрелиз (бета-канал).</summary>
     public bool Prerelease { get; init; }
 
-    /// <summary>Ссылки на установщики из вложений релиза.</summary>
-    public List<UpdateAsset> Assets { get; init; } = new();
+    /// <summary>Относительный путь загрузки установщика на сервере обновлений.</summary>
+    public string InstallerUrl { get; init; } = "";
 
-    /// <summary>Дата публикации.</summary>
-    public DateTime PublishedAt { get; init; }
-}
+    /// <summary>Имя файла установщика.</summary>
+    public string InstallerName { get; init; } = "";
 
-/// <summary>Вложение релиза: установщик или контрольный файл.</summary>
-public sealed class UpdateAsset
-{
-    public string Name { get; init; } = "";
-    public string Url { get; init; } = "";
+    /// <summary>Размер установщика в байтах.</summary>
     public long SizeBytes { get; init; }
 
-    /// <summary>SHA-256 из имени файла вида EditorHelper-Setup-0.4.0.exe.sha256.</summary>
-    public string? Sha256 { get; init; }
+    public DateTime PublishedAt { get; init; }
 }
 
 /// <summary>Один шаг прогресса загрузки установщика.</summary>
@@ -53,162 +47,105 @@ public sealed class UpdateProgress
 }
 
 /// <summary>
-/// Проверка и установка обновлений через GitHub Releases.
+/// Проверка и установка обновлений. Клиент не ходит в GitHub API напрямую:
+/// он спрашивает сервер обновлений со своей Bearer-сессией.
 ///
-/// Используются только публичные эндпоинты GitHub без аутентификации:
-///   GET https://api.github.com/repos/{owner}/{repo}/releases/latest
-///   GET https://api.github.com/repos/{owner}/{repo}/releases
-/// Токен в клиенте не нужен и не хранится: публикация релизов —
-/// задача владельца через GitHub Actions.
+/// Это принципиально для каналов:
+/// - Stable-пользователь получает метаданные только стабильных релизов;
+/// - бета-секция ответа сервера присутствует исключительно при флаге
+///   is_beta_tester у аккаунта — локальная настройка клиента этот флаг
+///   не подделывает, право живёт в базе сервера;
+/// - загрузка установщика тоже идёт через сервер, поэтому доступ к файлу
+///   проверяется на каждый запрос, а GitHub-токен беты в клиент не попадает.
 ///
-/// Целостность установщика проверяется контрольной суммой из отдельного
-/// артефакта релиза (.sha256), публикуемого той же сборкой GitHub Actions
-/// из того же тега. Подпись кода (Authenticode) не задействована: сертификата
-/// нет, и это ограничение отражено в SECURITY.md.
+/// Целостность установщика подтверждается SHA-256 из отдельного артефакта
+/// релиза (&lt;установщик&gt;.exe.sha256), который публикуется той же сборкой
+/// CI из того же тега. Релиз без артефакта суммы отклоняется.
 /// </summary>
 public sealed class UpdateService
 {
-    private static readonly HttpClient Http = CreateHttpClient();
+    private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromMinutes(10) };
 
-    private readonly string _owner;
-    private readonly string _repo;
-    private readonly string _apiBaseOverride;
+    private readonly string _baseUrl;
+    private readonly SessionService _session;
 
-    public UpdateService(string repositoryUrl)
+    public UpdateService(string baseUrl, SessionService session)
     {
-        var (owner, repo) = ParseRepository(repositoryUrl);
-        _owner = owner;
-        _repo = repo;
-        _apiBaseOverride = "";
+        _baseUrl = baseUrl.TrimEnd('/');
+        _session = session;
     }
-
-    /// <summary>
-    /// Тестовый конструктор: base задаётся напрямую, чтобы проверки работали
-    /// против локального фейкового API, а не настоящего GitHub.
-    /// </summary>
-    public UpdateService(string apiBase, string owner, string repo)
-    {
-        _owner = owner;
-        _repo = repo;
-        _apiBaseOverride = apiBase.TrimEnd('/');
-    }
-
-    /// <summary>Владелец и репозиторий (для отображения в интерфейсе).</summary>
-    public string Repository => $"{_owner}/{_repo}";
-
-    public string ApiBase => _apiBaseOverride.Length > 0
-        ? $"{_apiBaseOverride}/repos/{_owner}/{_repo}"
-        : $"https://api.github.com/repos/{_owner}/{_repo}";
-
-    /// <summary>
-    /// Адрес репозитория вида https://github.com/owner/repo. Пустая строка —
-    /// обновления не настроены.
-    /// </summary>
-    public bool IsConfigured => _owner.Length > 0 && _repo.Length > 0;
 
     /// <summary>Текущая установленная версия приложения.</summary>
     public static string CurrentVersion { get; } =
         Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "0.0.0";
 
     /// <summary>
-    /// Последний подходящий релиз для канала. Stable видит только обычные
-    /// релизы, Beta — ещё и предрелизы. Предлагается только более новая версия.
-    /// Возвращает null, когда обновлений нет или они не подходят.
+    /// Результат проверки: лучший релиз канала и признак бета-доступа.
+    /// BetaAllowed приходит от сервера и отражает право аккаунта, а не
+    /// желание клиента.
     /// </summary>
-    public async Task<UpdateRelease?> CheckForUpdateAsync(bool includePrereleases, CancellationToken ct = default)
+    public sealed record UpdateCheck(UpdateRelease? Stable, UpdateRelease? Beta, bool BetaAllowed);
+
+    /// <summary>
+    /// Проверяет обновления на сервере. Обычный пользователь видит только
+    /// Stable; бета-секция присутствует лишь при серверном разрешении.
+    /// </summary>
+    public async Task<UpdateCheck> CheckAsync(bool requestBetaChannel, CancellationToken ct = default)
     {
-        if (!IsConfigured) throw new InvalidOperationException("Адрес репозитория обновлений не настроен.");
+        var channel = requestBetaChannel ? "beta" : "stable";
+        using var request = new HttpRequestMessage(HttpMethod.Get,
+            $"{_baseUrl}/api/v1/updates/check?channel={channel}");
+        _session.ApplyAuthorization(request);
 
-        // /releases/latest отдаёт только обычный (не prerelease, не draft) релиз.
-        // Для бета-канала нужны все релизы: последним берётся самый свежий
-        // предрелиз или обычный — что выпущено позже.
-        List<UpdateRelease?> releases;
-        if (includePrereleases)
-        {
-            releases = (await ListReleasesAsync(ct)).Cast<UpdateRelease?>().ToList();
-        }
-        else
-        {
-            releases = new List<UpdateRelease?> { await GetLatestStableAsync(ct) };
-        }
-
-        var best = releases
-            .Where(r => r != null && !string.IsNullOrWhiteSpace(r.Version))
-            .Where(r => includePrereleases || !r!.Prerelease)
-            .Where(r => IsNewer(r!.Version, CurrentVersion))
-            .OrderByDescending(r => r!.Version, VersionComparer)
-            .FirstOrDefault();
-
-        return best;
-    }
-
-    /// <summary>Список последних релизов (до 30) для бета-канала.</summary>
-    public async Task<List<UpdateRelease>> ListReleasesAsync(CancellationToken ct = default)
-    {
-        using var request = ApiRequest("releases?per_page=30");
         using var response = await Http.SendAsync(request, ct);
-        response.EnsureSuccessStatusCode();
+        if (!response.IsSuccessStatusCode)
+            throw await ErrorAsync(response, "Не удалось проверить обновления.", ct);
 
         await using var stream = await response.Content.ReadAsStreamAsync(ct);
-        var raw = await JsonSerializer.DeserializeAsync<List<GitHubRelease>>(stream, Json, ct)
-                  ?? new List<GitHubRelease>();
+        var body = await JsonSerializer.DeserializeAsync<CheckResponse>(stream, Json, ct)
+                   ?? throw new InvalidDataException("Сервер обновлений вернул пустой ответ.");
 
-        // Draft-релизы видны только авторизованному владельцу — в публичном
-        // ответе их не бывает, но фильтр оставлен как страховка
-        return raw
-            .Where(r => r.Draft != true)
-            .Select(FromGitHub)
-            .Where(r => r != null)
-            .Select(r => r!)
-            .ToList();
-    }
-
-    /// <summary>Последний стабильный релиз (GitHub сам исключает prerelease и draft).</summary>
-    public async Task<UpdateRelease?> GetLatestStableAsync(CancellationToken ct = default)
-    {
-        using var request = ApiRequest("releases/latest");
-        using var response = await Http.SendAsync(request, ct);
-        if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
-            return null; // репозиторий есть, релизов ещё нет
-        response.EnsureSuccessStatusCode();
-
-        await using var stream = await response.Content.ReadAsStreamAsync(ct);
-        var raw = await JsonSerializer.DeserializeAsync<GitHubRelease>(stream, Json, ct);
-        return raw == null ? null : FromGitHub(raw);
+        return new UpdateCheck(
+            ParseRelease(body.Stable),
+            body.Beta?.Release == null ? null : ParseRelease(body.Beta.Release),
+            body.Beta != null);
     }
 
     /// <summary>
-    /// Скачивает установщик релиза в указанную папку и проверяет контрольную
-    /// сумму, если рядом с установщиком опубликован .sha256-артефакт.
-    /// Несовпавшая сумма — ошибка, файл удаляется.
+    /// Скачивает установщик релиза через сервер обновлений и проверяет его
+    /// контрольную сумму. Несовпавшая сумма — ошибка, файл удаляется.
+    /// Релиз без опубликованной суммы не скачивается вовсе.
     /// </summary>
     public async Task<string> DownloadInstallerAsync(
         UpdateRelease release, string destinationFolder,
         IProgress<UpdateProgress>? progress = null, CancellationToken ct = default)
     {
-        var installer = ChooseInstaller(release.Assets);
-        if (installer == null)
+        if (string.IsNullOrWhiteSpace(release.InstallerUrl))
             throw new InvalidOperationException(
                 "В релизе нет установщика для Windows (EditorHelper-Setup-*.exe).");
 
-        // Сумма для установщика ищется до загрузки: без неё файл проверять нечем
-        var checksum = await TryFetchChecksumForAsync(release.Assets, installer.Name, ct);
-        if (checksum == null)
-            throw new InvalidDataException(
-                $"В релизе нет контрольной суммы для {installer.Name}. " +
-                "Обновление не устанавливается без подтверждения целостности файла.");
+        if (string.IsNullOrWhiteSpace(release.InstallerName))
+            throw new InvalidOperationException("Сервер не сообщил имя установщика.");
 
         Directory.CreateDirectory(destinationFolder);
-        var path = Path.Combine(destinationFolder, installer.Name);
+        var path = Path.Combine(destinationFolder, release.InstallerName);
 
-        using var request = new HttpRequestMessage(HttpMethod.Get, installer.Url);
-        // browser_download_url отдаёт redirect на objects.githubusercontent.com —
-        // HttpClient следует ему автоматически; редиректы GitHub в HTTPS
-        request.Headers.Add("User-Agent", UserAgent);
+        // Сумма скачивается до установщика: её отсутствие означает, что
+        // релиз собран без шага контрольной суммы, и доверять файлу нельзя
+        var expected = await FetchChecksumAsync(release, ct);
+        if (expected == null)
+            throw new InvalidDataException(
+                $"В релизе {release.Tag} нет контрольной суммы для {release.InstallerName}. " +
+                "Обновление не устанавливается без подтверждения целостности файла.");
+
+        using var request = new HttpRequestMessage(HttpMethod.Get, _baseUrl + release.InstallerUrl);
+        _session.ApplyAuthorization(request);
+
         using var response = await Http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
-        response.EnsureSuccessStatusCode();
+        if (!response.IsSuccessStatusCode)
+            throw await ErrorAsync(response, "Не удалось скачать обновление.", ct);
 
-        var total = response.Content.Headers.ContentLength ?? installer.SizeBytes;
+        var total = response.Content.Headers.ContentLength ?? release.SizeBytes;
         long received = 0;
 
         await using (var content = await response.Content.ReadAsStreamAsync(ct))
@@ -227,12 +164,11 @@ public sealed class UpdateService
         if (total > 0 && received != total)
         {
             TryDelete(path);
-            throw new IOException(
-                $"Загрузка прервана: получено {received} из {total} байт.");
+            throw new IOException($"Загрузка прервана: получено {received} из {total} байт.");
         }
 
-        var actualHash = await Sha256FileAsync(path, ct);
-        if (!string.Equals(actualHash, checksum, StringComparison.OrdinalIgnoreCase))
+        var actual = await Sha256FileAsync(path, ct);
+        if (!string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase))
         {
             TryDelete(path);
             throw new InvalidDataException(
@@ -244,102 +180,73 @@ public sealed class UpdateService
     }
 
     /// <summary>
-    /// Установщик для этой машины: x64-архитектура, формат EditorHelper-Setup-*.exe.
-    /// Прочие вложения (суммы, архивы, исходники) не подходят.
+    /// Сумма установщика из артефакта &lt;имя&gt;.sha256, опубликованного тем же
+    /// CI-запуском. Артефакт лежит рядом с установщиком в релизе, сервер
+    /// отдаёт его по тому же маршруту загрузки.
     /// </summary>
-    public static UpdateAsset? ChooseInstaller(IReadOnlyList<UpdateAsset> assets)
+    private async Task<string?> FetchChecksumAsync(UpdateRelease release, CancellationToken ct)
     {
-        foreach (var asset in assets)
+        var checksumUrl = release.InstallerUrl + ".sha256";
+        try
         {
-            var name = asset.Name.ToLowerInvariant();
-            if (name.StartsWith("editorhelper-setup-", StringComparison.Ordinal) &&
-                name.EndsWith(".exe", StringComparison.Ordinal))
-                return asset;
+            using var request = new HttpRequestMessage(HttpMethod.Get, _baseUrl + checksumUrl);
+            _session.ApplyAuthorization(request);
+            using var response = await Http.SendAsync(request, ct);
+            if (!response.IsSuccessStatusCode) return null;
+
+            var text = (await response.Content.ReadAsStringAsync(ct)).Trim();
+            if (text.Length == 0) return null;
+
+            // Формат shasum: "<hex>  <filename>" или просто "<hex>"
+            var value = text.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries)[0];
+            return value.Length == 64 && value.All(c => c is >= '0' and <= '9' or >= 'a' and <= 'f' or >= 'A' and <= 'F')
+                ? value.ToLowerInvariant()
+                : null;
         }
-        return null;
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        {
+            return null;
+        }
     }
 
-    /// <summary>Сумма для установщика: ищется файл с его именем + .sha256.</summary>
-    public static UpdateAsset? FindChecksumAsset(IReadOnlyList<UpdateAsset> assets, string installerName)
+    private static UpdateRelease? ParseRelease(ReleaseResponse? raw)
     {
-        var expected = installerName.ToLowerInvariant() + ".sha256";
-        return assets.FirstOrDefault(a => a.Name.ToLowerInvariant() == expected);
+        if (raw == null || string.IsNullOrWhiteSpace(raw.Tag)) return null;
+
+        var version = raw.Tag.Trim();
+        if (version.StartsWith('v') || version.StartsWith('V')) version = version[1..];
+
+        return new UpdateRelease
+        {
+            Tag = raw.Tag,
+            Version = version,
+            Title = raw.Title ?? raw.Tag,
+            Notes = raw.Notes ?? "",
+            HtmlUrl = raw.HtmlUrl ?? "",
+            Prerelease = raw.Prerelease,
+            InstallerUrl = raw.InstallerUrl ?? "",
+            InstallerName = raw.InstallerName ?? "",
+            SizeBytes = raw.SizeBytes,
+            PublishedAt = raw.PublishedAt ?? default
+        };
     }
 
-    /// <summary>
-    /// Скачивает и разбирает .sha256-артефакт: файл содержит hex-сумму
-    /// (и, по традиции shasum, имя файла в той же строке).
-    /// </summary>
-    public async Task<string?> FetchChecksumAsync(UpdateAsset checksumAsset, CancellationToken ct = default)
+    private static async Task<InvalidOperationException> ErrorAsync(
+        HttpResponseMessage response, string fallback, CancellationToken ct)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Get, checksumAsset.Url);
-        request.Headers.Add("User-Agent", UserAgent);
-        using var response = await Http.SendAsync(request, ct);
-        if (!response.IsSuccessStatusCode) return null;
-
-        var text = (await response.Content.ReadAsStringAsync(ct)).Trim();
-        if (text.Length == 0) return null;
-
-        // Формат: "<hex>  <filename>" или просто "<hex>"
-        var parts = text.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
-        if (parts.Length == 0) return null;
-
-        var value = parts[0];
-        return value.Length is 64 or 128 && value.All(c => c is >= '0' and <= '9' or >= 'a' and <= 'f' or >= 'A' and <= 'F')
-            ? value
-            : null;
+        try
+        {
+            using var json = await JsonDocument.ParseAsync(
+                await response.Content.ReadAsStreamAsync(ct), cancellationToken: ct);
+            if (json.RootElement.TryGetProperty("message", out var message) &&
+                message.GetString() is { Length: > 0 } text)
+                return new InvalidOperationException(text);
+        }
+        catch { }
+        return new InvalidOperationException($"{fallback} (HTTP {(int)response.StatusCode})");
     }
 
-    /// <summary>Сумма установщика, если .sha256-артефакт опубликован и корректен.</summary>
-    private async Task<string?> TryFetchChecksumForAsync(IReadOnlyList<UpdateAsset> assets, string installerName, CancellationToken ct)
-    {
-        var asset = FindChecksumAsset(assets, installerName);
-        return asset == null ? null : await FetchChecksumAsync(asset, ct);
-    }
-
-    private HttpRequestMessage ApiRequest(string path) =>
-        new(HttpMethod.Get, $"{ApiBase}/{path}");
-
-    private const string UserAgent = "EditorHelper-Update-Check";
-
-    private static HttpClient CreateHttpClient()
-    {
-        var client = new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
-        // GitHub требует User-Agent; без него отвечает 403
-        client.DefaultRequestHeaders.Add("User-Agent", UserAgent);
-        // API отвечает JSON; Accept выбирает стабильную версию без бета-полей
-        client.DefaultRequestHeaders.Accept.Add(
-            new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
-        return client;
-    }
-
-    /// <summary>
-    /// Разбор адреса репозитория: https://github.com/owner/repo (с хвостами
-    /// issues, слэшами, .git) или краткая форма owner/repo.
-    /// </summary>
-    public static (string Owner, string Repo) ParseRepository(string url)
-    {
-        if (string.IsNullOrWhiteSpace(url)) return ("", "");
-
-        var trimmed = url.Trim().TrimEnd('/');
-        if (trimmed.EndsWith(".git", StringComparison.OrdinalIgnoreCase))
-            trimmed = trimmed[..^4];
-
-        string path;
-        int marker = trimmed.IndexOf("github.com", StringComparison.OrdinalIgnoreCase);
-        if (marker >= 0)
-            path = trimmed[(marker + "github.com".Length)..].Trim('/');
-        else if (trimmed.Contains('/') && !trimmed.Contains(' ') && !trimmed.StartsWith("http", StringComparison.OrdinalIgnoreCase))
-            path = trimmed; // краткая форма owner/repo
-        else
-            return ("", "");
-
-        var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        if (segments.Length < 2) return ("", "");
-
-        // Игнорируем хвосты вида /releases, /issues/latest
-        return (segments[0], segments[1]);
-    }
+    // ------------------------------------------------------------- сравнение версий
 
     /// <summary>Сравнение версий с поддержкой prerelease-метки (-beta.1).</summary>
     public static bool IsNewer(string candidate, string current)
@@ -358,8 +265,7 @@ public sealed class UpdateService
         numeric = a.Patch.CompareTo(b.Patch);
         if (numeric != 0) return numeric;
 
-        // Одинаковые номера: обычная версия новее prerelease,
-        // prerelease сравнивается по своей метке
+        // Одинаковые номера: обычная версия новее prerelease
         if (a.Pre == null && b.Pre == null) return 0;
         if (a.Pre == null) return 1;
         if (b.Pre == null) return -1;
@@ -392,52 +298,6 @@ public sealed class UpdateService
         return true;
     }
 
-    internal static IComparer<string> VersionComparer { get; } = new VersionStringComparer();
-
-    private sealed class VersionStringComparer : IComparer<string>
-    {
-        public int Compare(string? x, string? y)
-        {
-            TryParseVersion(x ?? "", out var a);
-            TryParseVersion(y ?? "", out var b);
-            return CompareVersions(a, b);
-        }
-    }
-
-    private static UpdateRelease? FromGitHub(GitHubRelease raw)
-    {
-        if (string.IsNullOrWhiteSpace(raw.TagName)) return null;
-
-        var version = raw.TagName.Trim();
-        if (version.StartsWith('v') || version.StartsWith('V')) version = version[1..];
-
-        return new UpdateRelease
-        {
-            Version = version,
-            Tag = raw.TagName,
-            Title = raw.Name ?? raw.TagName,
-            Notes = raw.Body ?? "",
-            HtmlUrl = raw.HtmlUrl ?? "",
-            Prerelease = raw.Prerelease == true,
-            PublishedAt = ParseDate(raw.PublishedAt),
-            Assets = raw.Assets?
-                .Where(a => !string.IsNullOrWhiteSpace(a.Name) && !string.IsNullOrWhiteSpace(a.BrowserDownloadUrl))
-                .Select(a => new UpdateAsset
-                {
-                    Name = a.Name!,
-                    Url = a.BrowserDownloadUrl!,
-                    SizeBytes = a.Size,
-                    Sha256 = null
-                })
-                .ToList() ?? new List<UpdateAsset>()
-        };
-    }
-
-    private static DateTime ParseDate(string? iso) =>
-        DateTime.TryParse(iso, null, System.Globalization.DateTimeStyles.RoundtripKind, out var date)
-            ? date
-            : default;
-
     private static async Task<string> Sha256FileAsync(string path, CancellationToken ct)
     {
         await using var stream = File.OpenRead(path);
@@ -456,22 +316,30 @@ public sealed class UpdateService
         PropertyNameCaseInsensitive = true
     };
 
-    private sealed class GitHubRelease
+    // ------------------------------------------------------------ ответы сервера
+
+    private sealed class CheckResponse
     {
-        [JsonPropertyName("tag_name")] public string? TagName { get; set; }
-        [JsonPropertyName("name")] public string? Name { get; set; }
-        [JsonPropertyName("body")] public string? Body { get; set; }
-        [JsonPropertyName("html_url")] public string? HtmlUrl { get; set; }
-        [JsonPropertyName("prerelease")] public bool? Prerelease { get; set; }
-        [JsonPropertyName("draft")] public bool? Draft { get; set; }
-        [JsonPropertyName("published_at")] public string? PublishedAt { get; set; }
-        [JsonPropertyName("assets")] public List<GitHubAsset>? Assets { get; set; }
+        [JsonPropertyName("stable")] public ReleaseResponse? Stable { get; set; }
+        [JsonPropertyName("beta")] public BetaSection? Beta { get; set; }
     }
 
-    private sealed class GitHubAsset
+    private sealed class BetaSection
     {
-        [JsonPropertyName("name")] public string? Name { get; set; }
-        [JsonPropertyName("browser_download_url")] public string? BrowserDownloadUrl { get; set; }
-        [JsonPropertyName("size")] public long Size { get; set; }
+        [JsonPropertyName("allowed")] public bool Allowed { get; set; }
+        [JsonPropertyName("release")] public ReleaseResponse? Release { get; set; }
+    }
+
+    private sealed class ReleaseResponse
+    {
+        [JsonPropertyName("tag")] public string? Tag { get; set; }
+        [JsonPropertyName("title")] public string? Title { get; set; }
+        [JsonPropertyName("notes")] public string? Notes { get; set; }
+        [JsonPropertyName("publishedAt")] public DateTime? PublishedAt { get; set; }
+        [JsonPropertyName("prerelease")] public bool Prerelease { get; set; }
+        [JsonPropertyName("installerUrl")] public string? InstallerUrl { get; set; }
+        [JsonPropertyName("installerName")] public string? InstallerName { get; set; }
+        [JsonPropertyName("sizeBytes")] public long SizeBytes { get; set; }
+        [JsonPropertyName("htmlUrl")] public string? HtmlUrl { get; set; }
     }
 }

@@ -1,0 +1,93 @@
+name: Beta release
+
+# Публикация бета-версии в ПРИВАТНЫЙ репозиторий бета-канала.
+# Stable-релизы (workflow release.yml) идут в публичный репозиторий и видны
+# всем; бета-артефакты и их описания должны быть недоступны посторонним,
+# поэтому выкладываются отдельным репозиторием с закрытым доступом.
+#
+# Запускается бета-тегом (vX.Y.Z-beta.N) в публичном репозитории исходников.
+# Артефакты публикуются в editorhelper-beta (приватный) через GitHub App /
+# PAT, хранящийся в секрет BETA_REPO_TOKEN с правами Contents:write только
+# на бета-репозиторий.
+on:
+  push:
+    tags: ['v*.*.*-beta.*']
+
+permissions:
+  contents: read
+
+jobs:
+  beta:
+    name: Build beta installer & publish to private repo
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Setup Inno Setup
+        shell: pwsh
+        run: |
+          $iscc = @(
+            "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+            "$env:ProgramFiles\Inno Setup 6\ISCC.exe",
+            "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe"
+          ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $iscc) {
+            winget install --id JRSoftware.InnoSetup --silent --accept-package-agreements --accept-source-agreements
+          }
+
+      # Тесты обязательны: бета и сломанная — не одно и то же
+      - name: Client tests
+        run: dotnet run --project tests/EditorHelper.Tests/EditorHelper.Tests.csproj --nologo
+
+      - name: Server tests
+        run: dotnet run --project "Editor Helper Server/tests/EditorHelper.Server.Tests/EditorHelper.Server.Tests.csproj" --nologo
+
+      - name: Verify tag matches project version
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}" -replace '^v', ''
+          $csproj = Select-String -Path EditorHelper.csproj -Pattern '<Version>(.+?)</Version>' | Select-Object -First 1
+          $version = $csproj.Matches[0].Groups[1].Value
+          if ($tag -ne $version) {
+            throw "Tag v$tag does not match project version $version. Update <Version> in EditorHelper.csproj."
+          }
+          if ($version -notmatch '-beta\.') {
+            throw "Beta workflow received a non-beta tag: $version. Use the release.yml workflow for stable tags."
+          }
+
+      - name: Build payload
+        shell: cmd
+        run: Release\publish.cmd
+
+      - name: Build installer
+        shell: cmd
+        run: Release\installer.cmd
+
+      - name: Compute checksum
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem "Release\output\EditorHelper-Setup-*.exe" | Select-Object -First 1
+          $hash = (Get-FileHash $exe.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $($exe.Name)" | Out-File -FilePath "$($exe.FullName).sha256" -Encoding ascii
+          Write-Host "SHA256: $hash"
+          "SETUP_FILE=$($exe.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "SETUP_NAME=$($exe.Name)" | Out-File -Append -FilePath $env:GITHUB_ENV
+
+      # Публикация в приватный бета-репозиторий. Токен не попадает в клиент:
+      # метаданные и файлы оттуда читает только сервер обновлений
+      - name: Create beta release
+        uses: softprops/action-gh-release@v2
+        with:
+          repository: ${{ vars.BETA_REPO || 'owner/editorhelper-beta' }}
+          token: ${{ secrets.BETA_REPO_TOKEN }}
+          prerelease: true
+          files: |
+            ${{ env.SETUP_FILE }}
+            ${{ env.SETUP_FILE }}.sha256
+          generate_release_notes: true
+          fail_on_unmatched_files: true

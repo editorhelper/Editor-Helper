@@ -134,6 +134,43 @@ public sealed class TelegramBotService : BackgroundService
             await HandleUserInfoCommandAsync(bot, chatId, user, text["/userinfo".Length..].Trim(), ct);
         else if (text.StartsWith("/role ", StringComparison.OrdinalIgnoreCase))
             await HandleRoleCommandAsync(bot, chatId, user, text["/role".Length..].Trim(), ct);
+        else if (text.StartsWith("/beta ", StringComparison.OrdinalIgnoreCase))
+            await HandleBetaCommandAsync(bot, chatId, user, text["/beta".Length..].Trim(), ct);
+    }
+
+    /// <summary>
+    /// /beta &lt;Telegram ID&gt; &lt;on|off&gt; — выдача и отзыв доступа к бета-каналу
+    /// обновлений. Доступно только Owner; право проверяется на сервере при
+    /// каждом вызове ChangeBetaAccessAsync, а не только при разборе команды.
+    /// </summary>
+    private async Task HandleBetaCommandAsync(TelegramClient bot, string chatId, AuthUser actor, string args, CancellationToken ct)
+    {
+        if (actor.Role != UserRole.Owner)
+        {
+            await bot.SendMessageAsync(chatId, "Управление бета-каналом доступно только Owner.", ct: ct);
+            return;
+        }
+
+        var parts = args.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length != 2 || !long.TryParse(parts[0], out var telegramId) ||
+            !new[] { "on", "off" }.Contains(parts[1].ToLowerInvariant()))
+        {
+            await bot.SendMessageAsync(chatId, "Формат: /beta <Telegram ID> <on|off> — выдать или отозвать доступ к бета-каналу.", ct: ct);
+            return;
+        }
+
+        var target = await _identity.FindUserAsync(telegramId.ToString(), ct);
+        if (target == null)
+        {
+            await bot.SendMessageAsync(chatId, $"Пользователь с Telegram ID {telegramId} не найден. Он должен хотя бы раз войти через Editor Helper.", ct: ct);
+            return;
+        }
+
+        var allowed = parts[1].Equals("on", StringComparison.OrdinalIgnoreCase);
+        var result = await _identity.ChangeBetaAccessAsync(actor.Id, target.Id, allowed, ct);
+        await bot.SendMessageAsync(chatId, (result.Success ? "✅ " : "⛔ ") + result.Message +
+            (result.Success ? $"\n{target.DisplayName}: бета-канал {(allowed ? "включён" : "выключен")}" : ""), ct: ct);
+        if (result.Success) await ShowUserAsync(bot, chatId, actor, telegramId.ToString(), ct);
     }
 
     /// <summary>
@@ -301,6 +338,8 @@ public sealed class TelegramBotService : BackgroundService
                 await bot.AnswerCallbackQueryAsync(callback.Id, ct: ct); await ShowUserAsync(bot, chatId, actor, targetId.ToString(), ct); break;
             case "role" when parts.Length == 3 && long.TryParse(parts[1], out var roleId) && Enum.TryParse<UserRole>(parts[2], true, out var role):
                 await bot.AnswerCallbackQueryAsync(callback.Id, ct: ct); await AskConfirmationAsync(bot, chatId, actor, callback.From.Id, "role", roleId, role.ToString(), ct); break;
+            case "beta" when parts.Length == 3 && long.TryParse(parts[1], out var betaId) && bool.TryParse(parts[2], out var betaAllowed):
+                await bot.AnswerCallbackQueryAsync(callback.Id, ct: ct); await AskConfirmationAsync(bot, chatId, actor, callback.From.Id, "beta", betaId, betaAllowed.ToString(), ct); break;
             case "block" when parts.Length == 3 && long.TryParse(parts[1], out var blockId) && bool.TryParse(parts[2], out var blocked):
                 await bot.AnswerCallbackQueryAsync(callback.Id, ct: ct); await AskConfirmationAsync(bot, chatId, actor, callback.From.Id, "block", blockId, blocked.ToString(), ct); break;
             case "revoke" when parts.Length == 2 && long.TryParse(parts[1], out var revokeId):
@@ -430,12 +469,13 @@ public sealed class TelegramBotService : BackgroundService
         {
             if (target.Role != UserRole.User) rows.Add(new[] { Button("👤 Снять VIP (User)", $"role:{target.Id}:User") });
             if (target.Role != UserRole.VIP) rows.Add(new[] { Button("💎 Выдать VIP", $"role:{target.Id}:VIP") });
+            rows.Add(new[] { Button(target.IsBetaTester ? "🧪 Отозвать бета-канал" : "🧪 Выдать бета-канал", $"beta:{target.Id}:{!target.IsBetaTester}") });
             rows.Add(new[] { Button(target.IsBlocked ? "Разблокировать" : "Блокировать", $"block:{target.Id}:{!target.IsBlocked}"), Button("Отозвать сессии", $"revoke:{target.Id}") });
             if (await _identity.GetDeviceAsync(target.Id, ct) != null)
                 rows.Add(new[] { Button("🔓 Отвязать устройство", $"device:{target.Id}") });
         }
         rows.Add(new[] { Button("← Назад", actor.Role == UserRole.Owner ? "users" : "menu") });
-        await bot.SendMessageAsync(chatId, $"ID: {target.Id}\nTelegram ID: {target.TelegramId?.ToString() ?? "не привязан"}\nИмя: {target.DisplayName}\nРоль: {RoleLabel(target.Role)}\nСтатус: {(target.IsBlocked ? "заблокирован" : "активен")}\nРегистрация UTC: {target.CreatedAt:yyyy-MM-dd HH:mm}", new { inline_keyboard = rows }, ct);
+        await bot.SendMessageAsync(chatId, $"ID: {target.Id}\nTelegram ID: {target.TelegramId?.ToString() ?? "не привязан"}\nИмя: {target.DisplayName}\nРоль: {RoleLabel(target.Role)}\nБета-канал: {(target.IsBetaTester ? "доступ выдан 🧪" : "закрыт")}\nСтатус: {(target.IsBlocked ? "заблокирован" : "активен")}\nРегистрация UTC: {target.CreatedAt:yyyy-MM-dd HH:mm}", new { inline_keyboard = rows }, ct);
     }
 
     private static string RoleLabel(UserRole role) => role switch
@@ -464,6 +504,7 @@ public sealed class TelegramBotService : BackgroundService
         (bool Success, string Message) result = action.Action switch
         {
             "role" when actor.Role == UserRole.Owner && Enum.TryParse<UserRole>(action.Value, out var role) => await _identity.ChangeRoleAsync(actor.Id, action.TargetId, role, ct),
+            "beta" when actor.Role == UserRole.Owner && bool.TryParse(action.Value, out var betaAllowed) => await _identity.ChangeBetaAccessAsync(actor.Id, action.TargetId, betaAllowed, ct),
             "block" when bool.TryParse(action.Value, out var blocked) => await _identity.SetBlockedAsync(actor.Id, action.TargetId, blocked, ct),
             "revoke" => await _identity.RevokeAllSessionsAsync(actor.Id, action.TargetId, ct),
             "unbind" when actor.Role == UserRole.Owner => await _identity.UnbindDeviceByOwnerAsync(actor.Id, action.TargetId, ct),

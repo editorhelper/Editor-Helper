@@ -61,6 +61,7 @@ public static class ServerHost
 
         app.MapAuthEndpoints();
         app.MapPublicEndpoints();
+        app.MapUpdateEndpoints();
         app.MapAdminEndpoints();
 
         // Админка — статическая страница из wwwroot, доступна по /admin

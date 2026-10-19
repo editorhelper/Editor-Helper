@@ -39,6 +39,7 @@ public static class Program
         await TestRoleMigrationAsync();
         await TestDeviceBindingAsync();
         await TestAdminPanelLifecycleAsync();
+        await TestBetaChannelAsync();
         TestRateLimiterUnit();
         await TestRateLimitingAsync();
         await TestIntegrationAsync();
@@ -620,6 +621,119 @@ public static class Program
         Check("still throttled within the same minute", !sliding.Allow("s", 5, t0.AddSeconds(30)).Allowed);
         Check("throttle lifts once the burst ages out of the minute",
             sliding.Allow("s", 5, t0.AddSeconds(61)).Allowed);
+    }
+
+    /// <summary>
+    /// Бета-канал обновлений: выдача и отзыв прав, отсутствие доступа по
+    /// умолчанию, невозможность самоназначения, отражение флага в сессии и
+    /// аудит. Сценарии клиента сводятся к этим же эндпоинтам: канал решает
+    /// сервер, локальный флаг клиента без права ничего не даёт.
+    /// </summary>
+    private static async Task TestBetaChannelAsync()
+    {
+        Section("Beta channel access");
+
+        await using var server = await StartServerAsync(telegram: false, allowLocalExternal: true);
+        var store = server.App.Services.GetRequiredService<IdentityStore>();
+
+        await store.BootstrapOwnerAsync("Beta Owner", telegramId: null);
+        var owner = await store.CreateLocalDevelopmentSessionAsync("Beta Owner", TimeSpan.FromHours(1));
+        var plain = await store.CreateLocalDevelopmentSessionAsync("Plain User", TimeSpan.FromHours(1));
+        var tester = await store.CreateLocalDevelopmentSessionAsync("Future Tester", TimeSpan.FromHours(1));
+
+        // ------------------------------------------------ по умолчанию доступа нет
+        var plainUser = await store.FindUserAsync(plain.User.Id.ToString());
+        Check("new user has no beta access by default", plainUser?.IsBetaTester == false);
+        var testerUser = await store.FindUserAsync(tester.User.Id.ToString());
+        Check("tester before grant has no beta access", testerUser?.IsBetaTester == false);
+
+        // ------------------------------------------------ самоназначение запрещено
+
+        // Пользователь не может выдать доступ сам себе через API
+        var selfGrant = await SendBearerJsonAsync(server.BaseUrl, plain.Token, HttpMethod.Put,
+            $"/admin/api/users/{plain.User.Id}/beta", new { allowed = true });
+        Check("user cannot grant beta to self",
+            selfGrant.StatusCode is System.Net.HttpStatusCode.Forbidden or System.Net.HttpStatusCode.Unauthorized,
+            selfGrant.StatusCode.ToString());
+        selfGrant.Dispose();
+
+        // Аноним — тем более (PUT: неверный метод дал бы 405 вместо проверки прав)
+        using var anonGrant = await SendBearerJsonAsync(server.BaseUrl, "not-a-real-token", HttpMethod.Put,
+            $"/admin/api/users/{plain.User.Id}/beta", new { allowed = true });
+        Check("anonymous cannot grant beta",
+            anonGrant.StatusCode is System.Net.HttpStatusCode.Unauthorized or System.Net.HttpStatusCode.Forbidden,
+            anonGrant.StatusCode.ToString());
+
+        // ------------------------------------------------ выдача и отзыв
+
+        var grant = await SendBearerJsonAsync(server.BaseUrl, owner.Token, HttpMethod.Put,
+            $"/admin/api/users/{tester.User.Id}/beta", new { allowed = true });
+        Check("owner grants beta access", grant.IsSuccessStatusCode, await grant.Content.ReadAsStringAsync());
+        grant.Dispose();
+
+        testerUser = await store.FindUserAsync(tester.User.Id.ToString());
+        Check("grant persisted in store", testerUser?.IsBetaTester == true);
+
+        // Флаг попадает в сессию — именно так /api/v1/updates/check его видит
+        var authed = await store.AuthenticateAsync(tester.Token);
+        Check("session reflects beta flag", authed?.User.IsBetaTester == true);
+        var plainFresh = await store.AuthenticateAsync(plain.Token);
+        Check("plain session reflects no beta", plainFresh?.User.IsBetaTester == false);
+
+        // Отзыв
+        var revoke = await SendBearerJsonAsync(server.BaseUrl, owner.Token, HttpMethod.Put,
+            $"/admin/api/users/{tester.User.Id}/beta", new { allowed = false });
+        Check("owner revokes beta access", revoke.IsSuccessStatusCode);
+        revoke.Dispose();
+        testerUser = await store.FindUserAsync(tester.User.Id.ToString());
+        Check("revoke persisted in store", testerUser?.IsBetaTester == false);
+
+        // Отзыв виден сразу: сессия читает флаг из базы при каждом запросе,
+        // а не кэширует его на время жизни токена
+        var revokedSession = await store.AuthenticateAsync(tester.Token);
+        Check("revoked access visible immediately", revokedSession?.User.IsBetaTester == false);
+
+        // Повторная выдача после отзыва работает
+        var regrant = await SendBearerJsonAsync(server.BaseUrl, owner.Token, HttpMethod.Put,
+            $"/admin/api/users/{tester.User.Id}/beta", new { allowed = true });
+        Check("re-grant after revoke works", regrant.IsSuccessStatusCode);
+        regrant.Dispose();
+
+        // ------------------------------------------------ журнал аудита
+
+        var audit = await store.ListAuditAsync();
+        Check("grant is audited", audit.Any(e => e.Action == "beta.access.granted" && e.Target == tester.User.Id.ToString()));
+        Check("revoke is audited", audit.Any(e => e.Action == "beta.access.revoked" && e.Target == tester.User.Id.ToString()));
+
+        // ------------------------------------------------ эндпоинт проверки
+
+        // Без настроенных репозиториев обновлений сервер отвечает 503, а не
+        // раздаёт пустые метаданные: канал честно не сконфигурирован
+        using var checkResponse = await SendBearerAsync(server.BaseUrl, tester.Token, HttpMethod.Get,
+            "/api/v1/updates/check?channel=beta");
+        Check("update check without repo config returns 503",
+            checkResponse.StatusCode == System.Net.HttpStatusCode.ServiceUnavailable,
+            checkResponse.StatusCode.ToString());
+
+        // Запрос беты без права: серверу неоткуда взять бета-репозиторий для
+        // неавторизованного в бете пользователя — тоже отказ, а не фолбэк на стейбл
+        using var plainCheck = await SendBearerAsync(server.BaseUrl, plain.Token, HttpMethod.Get,
+            "/api/v1/updates/check?channel=beta");
+        Check("plain user beta-channel request does not fall back silently",
+            plainCheck.StatusCode == System.Net.HttpStatusCode.ServiceUnavailable);
+
+        // ------------------------------------------------ сравнение тегов
+
+        Check("v0.10.0 > v0.9.0 (numeric, not string order)",
+            EditorHelper.Server.Api.UpdateEndpoints.CompareTags("v0.10.0", "v0.9.0") > 0);
+        Check("v1.0.0 > v1.0.0-beta.1 (final beats prerelease)",
+            EditorHelper.Server.Api.UpdateEndpoints.CompareTags("v1.0.0", "v1.0.0-beta.1") > 0);
+        Check("v1.0.0-beta.2 > v1.0.0-beta.1",
+            EditorHelper.Server.Api.UpdateEndpoints.CompareTags("v1.0.0-beta.2", "v1.0.0-beta.1") > 0);
+        Check("equal tags compare as equal",
+            EditorHelper.Server.Api.UpdateEndpoints.CompareTags("v1.0.0", "v1.0.0") == 0);
+        Check("v2.0.0 > v1.9.9",
+            EditorHelper.Server.Api.UpdateEndpoints.CompareTags("v2.0.0", "v1.9.9") > 0);
     }
 
     private static async Task TestRateLimitingAsync()

@@ -14,7 +14,16 @@ public enum UserRole
     Owner
 }
 
-public sealed record AuthUser(long Id, long? TelegramId, string DisplayName, UserRole Role, bool IsBlocked, DateTime CreatedAt, DateTime? LastLoginAt);
+public sealed record AuthUser(long Id, long? TelegramId, string DisplayName, UserRole Role, bool IsBlocked, DateTime CreatedAt, DateTime? LastLoginAt)
+{
+    /// <summary>
+    /// Разрешение на бета-канал обновлений. Выдаётся только Owner через
+    /// ChangeBetaAccessAsync; сериализуется в JSON сессии, поэтому поле
+    /// видит и клиент — но только как ответ сервера, сам себе его назначить
+    /// он не может.
+    /// </summary>
+    public bool IsBetaTester { get; init; }
+}
 public sealed record AuthSession(string Token, AuthUser User, DateTime ExpiresAt);
 public sealed record TelegramAuthChallenge(string RequestId, string? Code, DateTime ExpiresAt)
 {

@@ -38,6 +38,7 @@ public sealed class IdentityStore
                     display_name TEXT NOT NULL,
                     role TEXT NOT NULL CHECK(role IN ('User','VIP','Owner')),
                     is_blocked INTEGER NOT NULL DEFAULT 0,
+                    is_beta_tester INTEGER NOT NULL DEFAULT 0,
                     created_at TEXT NOT NULL,
                     last_login_at TEXT NULL
                 );
@@ -106,6 +107,13 @@ public sealed class IdentityStore
             {
                 ("bot_chat_id", "TEXT NULL"),
                 ("declined_at", "TEXT NULL")
+            }, ct);
+            // Бета-доступ: отдельный флаг, а не роль — ортогонален VIP/Owner
+            // и не участвует в CHECK(role ...), поэтому старая база обновляется
+            // простым ALTER без пересборки таблицы
+            await AddMissingColumnsAsync(connection, "users", new[]
+            {
+                ("is_beta_tester", "INTEGER NOT NULL DEFAULT 0")
             }, ct);
             await UpgradeRoleSchemaAsync(connection, ct);
             _initialized = true;
@@ -179,17 +187,20 @@ public sealed class IdentityStore
                         display_name TEXT NOT NULL,
                         role TEXT NOT NULL CHECK(role IN ('User','VIP','Owner')),
                         is_blocked INTEGER NOT NULL DEFAULT 0,
+                        is_beta_tester INTEGER NOT NULL DEFAULT 0,
                         created_at TEXT NOT NULL,
                         last_login_at TEXT NULL
                     );
-                    INSERT INTO users_new(id,telegram_id,display_name,role,is_blocked,created_at,last_login_at)
+                    INSERT INTO users_new(id,telegram_id,display_name,role,is_blocked,is_beta_tester,created_at,last_login_at)
                         SELECT id,telegram_id,display_name,
                                CASE role WHEN 'BetaTester' THEN 'VIP'
                                          WHEN 'Creator' THEN 'Owner'
                                          WHEN 'Owner' THEN 'Owner'
                                          WHEN 'VIP' THEN 'VIP'
                                          ELSE 'User' END,
-                               is_blocked,created_at,last_login_at FROM users;
+                               is_blocked,
+                               CASE WHEN is_beta_tester IS NULL THEN 0 ELSE is_beta_tester END,
+                               created_at,last_login_at FROM users;
                     DROP TABLE users;
                     ALTER TABLE users_new RENAME TO users;
                     """;
@@ -792,13 +803,13 @@ public sealed class IdentityStore
         await InitializeAsync(ct);
         await using var connection = await OpenAsync(ct);
         await using var command = connection.CreateCommand();
-        command.CommandText = "SELECT u.id,u.telegram_id,u.display_name,u.role,u.is_blocked,u.created_at,u.last_login_at,s.expires_at FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=$hash AND s.revoked_at IS NULL AND s.expires_at>$now";
+        command.CommandText = "SELECT u.id,u.telegram_id,u.display_name,u.role,u.is_blocked,u.is_beta_tester,u.created_at,u.last_login_at,s.expires_at FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=$hash AND s.revoked_at IS NULL AND s.expires_at>$now";
         command.Parameters.AddWithValue("$hash", Hash(token));
         command.Parameters.AddWithValue("$now", Now());
         await using var reader = await command.ExecuteReaderAsync(ct);
         if (!await reader.ReadAsync(ct) || reader.GetInt32(4) != 0) return null;
         var user = ReadUser(reader);
-        return new AuthSession(token, user, DateTime.Parse(reader.GetString(7), null, System.Globalization.DateTimeStyles.RoundtripKind));
+        return new AuthSession(token, user, DateTime.Parse(reader.GetString(8), null, System.Globalization.DateTimeStyles.RoundtripKind));
     }
 
     public async Task<LoginResult> CreateLocalDevelopmentSessionAsync(string displayName, TimeSpan lifetime, CancellationToken ct = default)
@@ -881,7 +892,7 @@ public sealed class IdentityStore
         await InitializeAsync(ct);
         await using var connection = await OpenAsync(ct);
         await using var command = connection.CreateCommand();
-        command.CommandText = "SELECT id,telegram_id,display_name,role,is_blocked,created_at,last_login_at FROM users WHERE ($query IS NULL OR CAST(telegram_id AS TEXT)=$query OR display_name LIKE '%' || $query || '%') ORDER BY id LIMIT 200";
+        command.CommandText = "SELECT id,telegram_id,display_name,role,is_blocked,is_beta_tester,created_at,last_login_at FROM users WHERE ($query IS NULL OR CAST(telegram_id AS TEXT)=$query OR display_name LIKE '%' || $query || '%') ORDER BY id LIMIT 200";
         command.Parameters.AddWithValue("$query", (object?)query ?? DBNull.Value);
         var result = new List<AuthUser>();
         await using var reader = await command.ExecuteReaderAsync(ct);
@@ -916,6 +927,36 @@ public sealed class IdentityStore
         await AddAuditAsync(connection, (SqliteTransaction)transaction, actorId, "user.role.changed", targetId.ToString(), role.ToString(), ct);
         await transaction.CommitAsync(ct);
         return (true, "Роль обновлена.");
+    }
+
+    /// <summary>
+    /// Выдача и отзыв доступа к бета-каналу обновлений. Только Owner; цель —
+    /// любой пользователь, включая самого себя (владельцу тестировать бету
+    /// можно). Отзыв не удаляет установленную бета-версию — клиент сам
+    /// предложит вернуться на Stable, — но новые бета-обновления выдаваться
+    /// перестанут.
+    /// </summary>
+    public async Task<(bool Success, string Message)> ChangeBetaAccessAsync(long actorId, long targetId, bool allowed, CancellationToken ct = default)
+    {
+        await InitializeAsync(ct);
+        await using var connection = await OpenAsync(ct);
+        await using var transaction = await connection.BeginTransactionAsync(ct);
+        var actor = await GetUserAsync(connection, (SqliteTransaction)transaction, actorId, ct);
+        var target = await GetUserAsync(connection, (SqliteTransaction)transaction, targetId, ct);
+        if (actor?.Role != UserRole.Owner) return (false, "Только Owner может управлять бета-доступом.");
+        if (target == null) return (false, "Пользователь не найден.");
+
+        await using var update = connection.CreateCommand();
+        update.Transaction = (SqliteTransaction)transaction;
+        update.CommandText = "UPDATE users SET is_beta_tester=$beta WHERE id=$id";
+        update.Parameters.AddWithValue("$beta", allowed ? 1 : 0);
+        update.Parameters.AddWithValue("$id", targetId);
+        await update.ExecuteNonQueryAsync(ct);
+        await AddAuditAsync(connection, (SqliteTransaction)transaction, actorId,
+            allowed ? "beta.access.granted" : "beta.access.revoked",
+            targetId.ToString(), null, ct);
+        await transaction.CommitAsync(ct);
+        return (true, allowed ? "Доступ к бета-каналу выдан." : "Доступ к бета-каналу отозван.");
     }
 
     public async Task<(bool Success, string Message)> SetBlockedAsync(long actorId, long targetId, bool blocked, CancellationToken ct = default)
@@ -966,7 +1007,7 @@ public sealed class IdentityStore
         await InitializeAsync(ct);
         await using var connection = await OpenAsync(ct);
         await using var command = connection.CreateCommand();
-        command.CommandText = "SELECT id,telegram_id,display_name,role,is_blocked,created_at,last_login_at FROM users WHERE CAST(id AS TEXT)=$key OR CAST(telegram_id AS TEXT)=$key LIMIT 1";
+        command.CommandText = "SELECT id,telegram_id,display_name,role,is_blocked,is_beta_tester,created_at,last_login_at FROM users WHERE CAST(id AS TEXT)=$key OR CAST(telegram_id AS TEXT)=$key LIMIT 1";
         command.Parameters.AddWithValue("$key", key);
         await using var reader = await command.ExecuteReaderAsync(ct);
         return await reader.ReadAsync(ct) ? ReadUser(reader) : null;
@@ -1015,7 +1056,7 @@ public sealed class IdentityStore
     {
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
-        command.CommandText = "SELECT id,telegram_id,display_name,role,is_blocked,created_at,last_login_at FROM users WHERE id=$id";
+        command.CommandText = "SELECT id,telegram_id,display_name,role,is_blocked,is_beta_tester,created_at,last_login_at FROM users WHERE id=$id";
         command.Parameters.AddWithValue("$id", id);
         await using var reader = await command.ExecuteReaderAsync(ct);
         return await reader.ReadAsync(ct) ? ReadUser(reader) : null;
@@ -1024,8 +1065,20 @@ public sealed class IdentityStore
     private static AuthUser ReadUser(SqliteDataReader reader) => new(
         reader.GetInt64(0), reader.IsDBNull(1) ? null : reader.GetInt64(1), reader.GetString(2),
         Enum.Parse<UserRole>(reader.GetString(3)), reader.GetInt32(4) != 0,
-        DateTime.Parse(reader.GetString(5), null, System.Globalization.DateTimeStyles.RoundtripKind),
-        reader.IsDBNull(6) ? null : DateTime.Parse(reader.GetString(6), null, System.Globalization.DateTimeStyles.RoundtripKind));
+        DateTime.Parse(reader.GetString(6), null, System.Globalization.DateTimeStyles.RoundtripKind),
+        reader.IsDBNull(7) ? null : DateTime.Parse(reader.GetString(7), null, System.Globalization.DateTimeStyles.RoundtripKind))
+    {
+        IsBetaTester = BetaFlag(reader, 5)
+    };
+
+    /// <summary>
+    /// is_beta_tester появился позже остальных колонок: старая база после
+    /// ALTER содержит его, но при расширении запросов читатель может попасть
+    /// на SELECT без колонки. NULL трактуется как «нет доступа» — так миграция
+    /// не даёт никому бета-доступ по умолчанию.
+    /// </summary>
+    private static bool BetaFlag(SqliteDataReader reader, int ordinal) =>
+        reader.FieldCount > ordinal && !reader.IsDBNull(ordinal) && reader.GetInt32(ordinal) != 0;
 
     private static string CleanDisplayName(string? value)
     {

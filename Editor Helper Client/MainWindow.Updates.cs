@@ -9,86 +9,52 @@ using EditorHelper.Ui;
 namespace EditorHelper;
 
 /// <summary>
-/// Раздел обновлений в Settings: текущая и доступная версии, заметки релиза,
-/// проверка, загрузка и запуск установщика из GitHub Releases.
+/// Раздел обновлений в Settings.
 ///
-/// Проверка и загрузка не блокируют интерфейс: кнопки переводятся в состояние
-/// занятости, остальное приложение продолжает работать. Установка — Inno Setup
-/// поверх закрытого приложения: установщик сам закрывает его (CloseApplications)
-/// и запускает заново. Токен GitHub здесь не нужен и не хранится: чтение
-/// публичных релизов анонимно, публикацию делает владелец через Actions.
+/// Канал обновлений решает сервер, а не клиент: бета-переключатель активен
+/// только когда сервер подтвердил право аккаунта (BetaAllowed в ответе
+/// /api/v1/updates/check). Пользователь без разрешения не видит ни
+/// бета-версий, ни их описаний — и не может включить бету локальной
+/// настройкой, потому что сервер просто не отдаст бета-метаданные.
+///
+/// Проверка и загрузка не блокируют интерфейс. Установка — Inno Setup поверх
+/// закрытого приложения: установщик сам закрывает его и запускает заново.
 /// </summary>
 public partial class MainWindow
 {
-    private UpdateService? _updateService;
     private UpdateRelease? _pendingUpdate;
     private CancellationTokenSource? _updateCts;
     private bool _updateBusy;
+    private bool _betaAllowed;
 
-    private UpdateService CreateUpdateService()
-    {
-        // Сервис пересоздаётся при смене адреса: старый HttpClient ссылается
-        // на прежний репозиторий
-        return new UpdateService(_settings.UpdateRepository);
-    }
+    private UpdateService? CreateUpdateService() =>
+        _sessionService is { IsAuthenticated: true } authed
+            ? new UpdateService(authed.BaseUrl, authed)
+            : null;
 
     /// <summary>Строит блок обновлений: состояние, заметки и действия.</summary>
     private StackPanel BuildUpdateSection()
     {
         var stack = new StackPanel();
 
-        // Адрес репозитория: без него раздел сообщает, что не настроен
-        var repoFrame = new Border
-        {
-            Background = Palette.Glass,
-            BorderBrush = Palette.GlassBorder,
-            BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(10),
-            Margin = new Thickness(0, 0, 0, 12)
-        };
-        var repoGrid = new Grid();
-        repoGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        repoGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        // Ссылка на страницу релиза заполняется результатом проверки;
+        // объявлена первой, потому что кнопка-ссылка захватывает её замыканием
+        string releasePageUrl = "";
 
-        repoGrid.Children.Add(new TextBlock
-        {
-            Text = "github.com/",
-            FontSize = 12.5,
-            Foreground = Palette.TextMuted,
-            VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(12, 0, 4, 0)
-        });
+        var service = CreateUpdateService();
 
-        var repoBox = new TextBox
+        if (service == null)
         {
-            Text = RepositoryShortForm(_settings.UpdateRepository),
-            Style = (Style)FindResource("GlassTextBox"),
-            Padding = new Thickness(4, 9, 12, 9),
-            ToolTip = "Адрес репозитория с релизами, например owner/editorhelper"
-        };
-        repoBox.TextChanged += (_, _) => repoBox.Tag = repoBox.Text;
-        Grid.SetColumn(repoBox, 1);
-        repoGrid.Children.Add(repoBox);
-        repoFrame.Child = repoGrid;
-        stack.Children.Add(repoFrame);
-
-        var betaCheck = new CheckBox
-        {
-            Content = "Бета-канал: получать предрелизы вместе со стабильными",
-            IsChecked = _settings.UpdateIncludePrereleases,
-            Margin = new Thickness(0, 0, 0, 14)
-        };
-        betaCheck.Checked += (_, _) =>
-        {
-            _settings.UpdateIncludePrereleases = true;
-            _settings.Save();
-        };
-        betaCheck.Unchecked += (_, _) =>
-        {
-            _settings.UpdateIncludePrereleases = false;
-            _settings.Save();
-        };
-        stack.Children.Add(betaCheck);
+            stack.Children.Add(new TextBlock
+            {
+                Text = "Обновления проверяются через сервер каталога. Войдите в аккаунт, " +
+                       "чтобы проверять и устанавливать обновления.",
+                FontSize = 12.5,
+                Foreground = Palette.TextSecondary,
+                TextWrapping = TextWrapping.Wrap
+            });
+            return stack;
+        }
 
         // Статус: версии и результат последней проверки
         var statusCard = new Border
@@ -101,15 +67,12 @@ public partial class MainWindow
             Margin = new Thickness(0, 0, 0, 12)
         };
         var statusPanel = new StackPanel();
-        var versionRow = new StackPanel { Orientation = Orientation.Horizontal };
-        versionRow.Children.Add(new TextBlock
+        statusPanel.Children.Add(new TextBlock
         {
             Text = $"Текущая версия: {UpdateService.CurrentVersion}",
             FontSize = 12.5,
-            Foreground = Palette.TextSecondary,
-            VerticalAlignment = VerticalAlignment.Center
+            Foreground = Palette.TextSecondary
         });
-        statusPanel.Children.Add(versionRow);
         var statusText = new TextBlock
         {
             Text = "Проверка не выполнялась в этом сеансе.",
@@ -121,6 +84,28 @@ public partial class MainWindow
         statusPanel.Children.Add(statusText);
         statusCard.Child = statusPanel;
         stack.Children.Add(statusCard);
+
+        // Бета-канал: переключатель появляется только при серверном праве
+        var betaCheck = new CheckBox
+        {
+            Content = "Бета-канал: проверять предрелизные версии",
+            IsChecked = _settings.UpdateBetaChannel,
+            IsEnabled = false,
+            Margin = new Thickness(0, 0, 0, 6),
+            ToolTip = "Доступ выдаётся администратором сервера"
+        };
+        var betaHint = new TextBlock
+        {
+            Text = "Бета-канал закрыт: доступ выдаёт администратор.",
+            FontSize = 11,
+            Foreground = Palette.TextMuted,
+            Margin = new Thickness(0, 0, 0, 14)
+        };
+        stack.Children.Add(betaCheck);
+        stack.Children.Add(betaHint);
+
+        betaCheck.Checked += (_, _) => { _settings.UpdateBetaChannel = true; _settings.Save(); };
+        betaCheck.Unchecked += (_, _) => { _settings.UpdateBetaChannel = false; _settings.Save(); };
 
         // Заметки релиза: показываются, когда найдено обновление
         var notesCard = new Border
@@ -158,7 +143,7 @@ public partial class MainWindow
             Margin = new Thickness(0, 10, 0, 0),
             HorizontalAlignment = HorizontalAlignment.Left
         };
-        releaseLink.Click += (_, _) => OpenInBrowser(_pendingUpdate?.HtmlUrl);
+        releaseLink.Click += (_, _) => OpenInBrowser(releasePageUrl);
         notesPanel.Children.Add(releaseLink);
         notesCard.Child = notesPanel;
         stack.Children.Add(notesCard);
@@ -222,15 +207,25 @@ public partial class MainWindow
             Visibility = Visibility.Collapsed
         };
 
+        // Возврат на Stable: показывается, если установлена бета и права нет
+        var downgradeButton = new Button
+        {
+            Content = "Вернуться на стабильную версию",
+            Style = (Style)FindResource("GlassButton"),
+            Visibility = Visibility.Collapsed,
+            Margin = new Thickness(0, 12, 0, 0)
+        };
+
         checkButton.Click += async (_, _) => await CheckForUpdatesAsync();
         actions.Children.Add(checkButton);
         updateButton.Click += async (_, _) => await InstallUpdateAsync();
         actions.Children.Add(updateButton);
-        stack.Children.Add(actions);
 
-        // Первая проверка — тихая, в фоне: результат появится в статусе
-        if (_updateService is { IsConfigured: true })
-            _ = QuietCheckAsync();
+        downgradeButton.Click += async (_, _) => await InstallUpdateAsync();
+        stack.Children.Add(downgradeButton);
+
+        // Первая проверка — тихая, в фоне
+        _ = QuietCheckAsync();
 
         return stack;
 
@@ -240,9 +235,8 @@ public partial class MainWindow
         {
             try
             {
-                var release = await _updateService!.CheckForUpdateAsync(
-                    _settings.UpdateIncludePrereleases, CancellationToken.None);
-                ShowUpdateResult(release);
+                var result = await service.CheckAsync(_settings.UpdateBetaChannel, CancellationToken.None);
+                ShowUpdateResult(result);
             }
             catch
             {
@@ -254,33 +248,14 @@ public partial class MainWindow
         {
             if (_updateBusy) return;
 
-            // Адрес мог измениться: применяем и сохраняем до проверки
-            var entered = RepositoryFullForm(repoBox.Text);
-            if (entered != _settings.UpdateRepository)
-            {
-                _settings.UpdateRepository = entered;
-                _settings.Save();
-            }
-
-            _updateService = CreateUpdateService();
-
-            if (!_updateService.IsConfigured)
-            {
-                statusText.Text = "Обновления не настроены: укажите адрес репозитория (owner/repo).";
-                notesCard.Visibility = Visibility.Collapsed;
-                updateButton.Visibility = Visibility.Collapsed;
-                return;
-            }
-
             _updateBusy = true;
             checkButton.IsEnabled = false;
             statusText.Text = "Проверяем обновления…";
 
             try
             {
-                var release = await _updateService.CheckForUpdateAsync(
-                    _settings.UpdateIncludePrereleases, CancellationToken.None);
-                ShowUpdateResult(release);
+                var result = await service.CheckAsync(_settings.UpdateBetaChannel, CancellationToken.None);
+                ShowUpdateResult(result);
             }
             catch (Exception ex)
             {
@@ -295,37 +270,91 @@ public partial class MainWindow
             }
         }
 
-        void ShowUpdateResult(UpdateRelease? release)
+        void ShowUpdateResult(UpdateService.UpdateCheck result)
         {
-            _pendingUpdate = release;
+            // Право на бету пришло с сервера: переключатель оживает только здесь
+            _betaAllowed = result.BetaAllowed;
+            betaCheck.IsEnabled = _betaAllowed;
+            betaHint.Text = _betaAllowed
+                ? "Доступ к бета-каналу выдан администратором."
+                : "Бета-канал закрыт: доступ выдаёт администратор.";
 
-            if (release == null)
+            _pendingUpdate = null;
+            releasePageUrl = "";
+
+            // Бета-канал включён и разрешён: обновлением считается бета
+            var betaCandidate = _settings.UpdateBetaChannel && _betaAllowed ? result.Beta : null;
+            var useBeta = betaCandidate != null;
+
+            var candidate = useBeta ? betaCandidate : result.Stable;
+
+            if (candidate != null && UpdateService.IsNewer(candidate.Version, UpdateService.CurrentVersion))
             {
-                statusText.Text = $"Обновлений нет — актуальна версия {UpdateService.CurrentVersion}." +
-                    (_settings.UpdateIncludePrereleases ? " (Бета-канал включён.)" : "");
-                notesCard.Visibility = Visibility.Collapsed;
-                updateButton.Visibility = Visibility.Collapsed;
-                return;
+                _pendingUpdate = candidate;
+                releasePageUrl = candidate.HtmlUrl;
+                statusText.Text = $"Доступна версия {candidate.Version}" +
+                    (candidate.Prerelease ? " (предрелиз)" : "") +
+                    $" — установлена {UpdateService.CurrentVersion}.";
+
+                notesText.Text = string.IsNullOrWhiteSpace(candidate.Notes)
+                    ? "Описание изменений не приложено к этому релизу."
+                    : candidate.Notes;
+                notesCard.Visibility = Visibility.Visible;
+                updateButton.Visibility = Visibility.Visible;
+                updateButton.Content = "Обновить сейчас";
             }
+            else
+            {
+                // Установлена бета, а права уже нет: предлагаем вернуться на
+                // стабильную версию, если она новее установленной
+                var onBeta = CurrentIsBeta();
+                var stableNewer = result.Stable != null &&
+                    UpdateService.IsNewer(result.Stable.Version, UpdateService.CurrentVersion);
 
-            statusText.Text = $"Доступна версия {release.Version}" +
-                (release.Prerelease ? " (предрелиз)" : "") +
-                $" — установлена {UpdateService.CurrentVersion}.";
-
-            notesText.Text = string.IsNullOrWhiteSpace(release.Notes)
-                ? "Описание изменений не приложено к этому релизу."
-                : release.Notes;
-            notesCard.Visibility = Visibility.Visible;
-            updateButton.Visibility = Visibility.Visible;
+                if (onBeta && stableNewer && result.Stable != null)
+                {
+                    _pendingUpdate = result.Stable;
+                    releasePageUrl = result.Stable.HtmlUrl;
+                    statusText.Text = $"Бета-доступ отозван. Доступна стабильная версия {result.Stable.Version} " +
+                        $"— установлена {UpdateService.CurrentVersion} (бета).";
+                    notesText.Text = result.Stable.Notes;
+                    notesCard.Visibility = Visibility.Visible;
+                    updateButton.Visibility = Visibility.Collapsed;
+                    downgradeButton.Visibility = Visibility.Visible;
+                }
+                else if (onBeta && !_betaAllowed)
+                {
+                    statusText.Text = $"Доступ к бета-каналу отозван. Установлена версия {UpdateService.CurrentVersion} (бета). " +
+                        "Когда выйдет более новая стабильная версия, здесь появится предложение обновиться.";
+                    notesCard.Visibility = Visibility.Collapsed;
+                    updateButton.Visibility = Visibility.Collapsed;
+                    downgradeButton.Visibility = Visibility.Collapsed;
+                }
+                else
+                {
+                    statusText.Text = $"Обновлений нет — актуальна версия {UpdateService.CurrentVersion}." +
+                        (_settings.UpdateBetaChannel && _betaAllowed ? " (Бета-канал включён.)" : "");
+                    notesCard.Visibility = Visibility.Collapsed;
+                    updateButton.Visibility = Visibility.Collapsed;
+                    downgradeButton.Visibility = Visibility.Collapsed;
+                }
+            }
         }
+
+        /// <summary>
+        /// Установленная версия — бета: суффикс -beta.N в номере версии
+        /// сборки. Определяется по локальному номеру, страницы GitHub не нужно.
+        /// </summary>
+        static bool CurrentIsBeta() => UpdateService.CurrentVersion.Contains("-beta", StringComparison.OrdinalIgnoreCase);
 
         async Task InstallUpdateAsync()
         {
-            if (_updateBusy || _pendingUpdate == null || _updateService == null) return;
+            if (_updateBusy || _pendingUpdate == null) return;
 
             var release = _pendingUpdate;
             _updateBusy = true;
             updateButton.IsEnabled = false;
+            downgradeButton.IsEnabled = false;
             checkButton.IsEnabled = false;
             progressCard.Visibility = Visibility.Visible;
             progressFill.Width = 0;
@@ -345,20 +374,18 @@ public partial class MainWindow
 
             try
             {
-                var destination = System.IO.Path.Combine(
+                var destination = Path.Combine(
                     Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                     "EditorHelper", "updates");
                 Directory.CreateDirectory(destination);
 
-                var installerPath = await _updateService.DownloadInstallerAsync(
+                var installerPath = await service.DownloadInstallerAsync(
                     release, destination, progress, _updateCts.Token);
 
                 progressText.Text = "Обновление загружено и проверено. Запускаем установку…";
                 StatusText.Text = $"Installing update {release.Version}…";
 
-                // Установщик закрывает приложение сам (Inno: CloseApplications).
-                // Небольшая пауза даёт установщику подняться раньше, чем мы
-                // начнём сворачивать окно.
+                // Установщик закрывает приложение сам (Inno: CloseApplications)
                 await Task.Delay(400);
 
                 Process.Start(new ProcessStartInfo
@@ -387,36 +414,21 @@ public partial class MainWindow
                 ShowToast("Ошибка обновления: " + ex.Message, Palette.Secondary);
                 ResetUpdateUi();
             }
+
+            void ResetUpdateUi()
+            {
+                _updateBusy = false;
+                _updateCts?.Dispose();
+                _updateCts = null;
+                updateButton.IsEnabled = true;
+                downgradeButton.IsEnabled = true;
+                checkButton.IsEnabled = true;
+                progressCard.Visibility = Visibility.Collapsed;
+            }
         }
-
-        void ResetUpdateUi()
-        {
-            _updateBusy = false;
-            _updateCts?.Dispose();
-            _updateCts = null;
-            updateButton.IsEnabled = true;
-            checkButton.IsEnabled = true;
-            progressCard.Visibility = Visibility.Collapsed;
-        }
     }
 
-    /// <summary>owner/repo из полного адреса; пустая строка остаётся пустой.</summary>
-    private static string RepositoryShortForm(string url)
-    {
-        var (owner, repo) = UpdateService.ParseRepository(url);
-        return owner.Length > 0 ? $"{owner}/{repo}" : "";
-    }
-
-    /// <summary>Полный адрес из введённого owner/repo или полного URL.</summary>
-    private static string RepositoryFullForm(string entered)
-    {
-        var (owner, repo) = UpdateService.ParseRepository(entered);
-        if (owner.Length == 0)
-            return entered.Trim();
-        return $"https://github.com/{owner}/{repo}";
-    }
-
-    private static void OpenInBrowser(string? url)
+    private static void OpenInBrowser(string url)
     {
         if (string.IsNullOrWhiteSpace(url)) return;
         try

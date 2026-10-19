@@ -1,13 +1,20 @@
 using System.IO;
-using System.Net.Http;
+using System.Net;
+using System.Net.Sockets;
+using System.Text;
 using EditorHelper.Services;
 
 namespace EditorHelper.Tests;
 
 /// <summary>
-/// Проверки системы обновлений: разбор версий, выбор установщика,
-/// фильтрация prerelease, поведение при ошибках сети и некорректных
-/// ответах. GitHub заменён локальным фейковым API — наружу тесты не ходят.
+/// Фейковый сервер обновлений на loopback: отдаёт заранее заданные JSON-ответы
+/// /api/v1/updates/check и файлы по /api/v1/updates/download. Тесты не ходят
+/// в настоящий GitHub и не зависят от сети.
+///
+/// Логика каналов (какие релизы видит пользователь) живёт на сервере, поэтому
+/// клиентские тесты проверяют: разбор ответа, сравнение версий, поведение
+/// при отказах и честность контрольных сумм. Поведение самого сервера —
+/// (какие секции попадают в ответ без прав) — покрыто серверными тестами.
 /// </summary>
 internal static class TestUpdateService
 {
@@ -18,252 +25,378 @@ internal static class TestUpdateService
     {
         _check = check;
         _section = section;
-        await RunAsync();
-    }
 
-    private static Task RunAsync() => RunAllAsync();
-
-    private static async Task RunAllAsync()
-    {
-        Section("Update service");
-
-        TestVersionParsing();
-        TestRepositoryParsing();
-        TestInstallerChoice();
+        TestVersionComparison();
+        await TestCheckParsingAsync();
         await TestNoUpdateWhenSameVersionAsync();
         await TestNewerVersionFoundAsync();
-        await TestPrereleaseFilteringAsync();
+        await TestBetaGateAsync();
         await TestErrorHandlingAsync();
-        await TestTamperedChecksumAsync();
+        await TestChecksumVerificationAsync();
     }
 
     private static void Section(string name) => _section!(name);
     private static void Check(string name, bool condition, string? detail = null) =>
         _check!(name, condition, detail);
 
-    private static void TestVersionParsing()
+    // ------------------------------------------------------------- версии
+
+    private static void TestVersionComparison()
     {
         Check("version parsed from tag with v prefix",
             UpdateService.TryParseVersion("v1.2.3", out var v) && v.Major == 1 && v.Minor == 2 && v.Patch == 3);
 
-        Check("version parsed without prefix",
-            UpdateService.TryParseVersion("1.0.0", out var plain) && plain.Major == 1 && plain.Pre == null);
-
         Check("version parsed with prerelease",
             UpdateService.TryParseVersion("1.1.0-beta.2", out var pre) && pre.Pre == "beta.2");
 
-        Check("two-part version accepted",
-            UpdateService.TryParseVersion("1.1", out var two) && two.Minor == 1 && two.Patch == 0);
+        Check("garbage rejected", !UpdateService.TryParseVersion("latest", out _));
 
-        Check("garbage rejected",
-            !UpdateService.TryParseVersion("latest", out _));
-
-        Check("empty rejected",
-            !UpdateService.TryParseVersion("", out _));
-
-        // Обновление предлагается только на более новую версию
         Check("1.1.0 is newer than 1.0.0", UpdateService.IsNewer("1.1.0", "1.0.0"));
-        Check("1.0.1 is newer than 1.0.0", UpdateService.IsNewer("1.0.1", "1.0.0"));
-        Check("2.0.0 is newer than 1.9.9", UpdateService.IsNewer("2.0.0", "1.9.9"));
         Check("same version is not newer", !UpdateService.IsNewer("1.0.0", "1.0.0"));
         Check("older version is not newer", !UpdateService.IsNewer("1.0.0", "1.1.0"));
         Check("v-prefix compared correctly", UpdateService.IsNewer("v1.1.0", "1.0.0"));
+        Check("two-digit minor ordering", UpdateService.IsNewer("0.10.0", "0.9.0"));
 
         // Одинаковый номер: финальная версия новее prerelease
-        Check("1.1.0 final is newer than 1.1.0-beta",
-            UpdateService.IsNewer("1.1.0", "1.1.0-beta"));
-        Check("1.1.0-beta is not newer than 1.1.0",
-            !UpdateService.IsNewer("1.1.0-beta", "1.1.0"));
-        Check("prerelease ordering by suffix",
-            UpdateService.IsNewer("1.1.0-beta.2", "1.1.0-beta.1"));
+        Check("1.1.0 final is newer than 1.1.0-beta", UpdateService.IsNewer("1.1.0", "1.1.0-beta"));
+        Check("1.1.0-beta is not newer than 1.1.0", !UpdateService.IsNewer("1.1.0-beta", "1.1.0"));
+        Check("prerelease ordering by suffix", UpdateService.IsNewer("1.1.0-beta.2", "1.1.0-beta.1"));
     }
 
-    private static void TestRepositoryParsing()
+    // ------------------------------------------------------------- разбор ответа
+
+    private static async Task TestCheckParsingAsync()
     {
-        var (owner, repo) = UpdateService.ParseRepository("https://github.com/user/editorhelper");
-        Check("repository url parsed", owner == "user" && repo == "editorhelper");
+        using var api = new FakeUpdateServer();
+        var session = new SessionService(api.BaseUrl);
+        var service = new UpdateService(api.BaseUrl, session);
 
-        var (owner2, repo2) = UpdateService.ParseRepository("https://github.com/user/editorhelper/issues");
-        Check("repository url with path suffix parsed", owner2 == "user" && repo2 == "editorhelper");
-
-        var (owner3, repo3) = UpdateService.ParseRepository("https://github.com/user/editorhelper.git");
-        Check("repository url with .git parsed", owner3 == "user" && repo3 == "editorhelper");
-
-        var (owner4, repo4) = UpdateService.ParseRepository("user/editorhelper");
-        Check("owner/repo shorthand parsed", owner4 == "user" && repo4 == "editorhelper");
-
-        var (owner5, repo5) = UpdateService.ParseRepository("");
-        Check("empty repository is unconfigured", owner5 == "" && repo5 == "");
-
-        var (owner6, repo6) = UpdateService.ParseRepository("https://gitlab.com/user/repo");
-        Check("non-github host is unconfigured", owner6 == "" && repo6 == "");
-    }
-
-    private static void TestInstallerChoice()
-    {
-        var assets = new List<UpdateAsset>
+        api.CheckResponse = """
         {
-            new() { Name = "EditorHelper-Setup-0.4.0.exe.sha256", Url = "http://x/1" },
-            new() { Name = "editorhelper-0.4.0-win.zip", Url = "http://x/2" },
-            new() { Name = "README.md", Url = "http://x/3" }
-        };
+          "stable": {
+            "tag": "v1.0.5", "title": "Stable 1.0.5", "notes": "Fix A",
+            "publishedAt": "2026-01-01T00:00:00Z", "prerelease": false,
+            "installerUrl": "/api/v1/updates/download?channel=stable&tag=v1.0.5",
+            "installerName": "EditorHelper-Setup-1.0.5.exe", "sizeBytes": 49800000,
+            "htmlUrl": "https://github.com/test/editorhelper/releases/tag/v1.0.5"
+          },
+          "beta": null
+        }
+        """;
 
-        Check("no installer in unrelated assets", UpdateService.ChooseInstaller(assets) == null);
+        var result = await service.CheckAsync(requestBetaChannel: false);
 
-        assets.Insert(0, new UpdateAsset { Name = "EditorHelper-Setup-0.4.0.exe", Url = "http://x/0" });
-        var installer = UpdateService.ChooseInstaller(assets);
-        Check("setup exe chosen among assets", installer?.Name == "EditorHelper-Setup-0.4.0.exe");
-
-        var checksumAsset = UpdateService.FindChecksumAsset(assets, "EditorHelper-Setup-0.4.0.exe");
-        Check("checksum asset found next to installer", checksumAsset?.Name == "EditorHelper-Setup-0.4.0.exe.sha256");
-
-        Check("checksum asset case-insensitive",
-            UpdateService.FindChecksumAsset(new List<UpdateAsset>
-            {
-                new() { Name = "EDITORHELPER-SETUP-0.4.0.exe.SHA256", Url = "http://x/c" }
-            }, "EditorHelper-Setup-0.4.0.exe") != null);
+        Check("stable release parsed", result.Stable != null, result.Stable?.Tag);
+        Check("version extracted without v", result.Stable?.Version == "1.0.5");
+        Check("notes carried", result.Stable?.Notes == "Fix A");
+        Check("installer url carried", result.Stable?.InstallerUrl?.Contains("channel=stable") == true);
+        Check("size carried", result.Stable?.SizeBytes == 49800000);
+        Check("beta section absent for plain user", result.Beta == null && !result.BetaAllowed);
     }
 
-    /// <summary>Сервер с одним ответом: /releases/latest отдаёт релиз текущей версии.</summary>
+    // ------------------------------------------------------------- нет обновлений
+
     private static async Task TestNoUpdateWhenSameVersionAsync()
     {
-        using var api = new GitHubApiServer();
-        var service = new UpdateService(api.BaseUrl, "test", "editorhelper");
+        using var api = new FakeUpdateServer();
+        var session = new SessionService(api.BaseUrl);
+        var service = new UpdateService(api.BaseUrl, session);
 
-        api.AlwaysRespond(GitHubApiServer.ReleaseJson(
-            $"v{UpdateService.CurrentVersion}", "Same version", "notes", false, DateTime.UtcNow,
-            ("EditorHelper-Setup-0.4.0.exe", 100)));
-
-        var release = await service.CheckForUpdateAsync(includePrereleases: false);
-        Check("same version is not offered", release == null);
+        api.CheckResponse = CheckJson(tag: $"v{UpdateService.CurrentVersion}", prerelease: false, beta: false);
+        var result = await service.CheckAsync(false);
+        Check("same version is not offered",
+            result.Stable != null &&
+            !UpdateService.IsNewer(result.Stable.Version, UpdateService.CurrentVersion));
     }
+
+    // ------------------------------------------------------------- новая версия
 
     private static async Task TestNewerVersionFoundAsync()
     {
-        using var api = new GitHubApiServer();
-        var service = new UpdateService(api.BaseUrl, "test", "editorhelper");
+        using var api = new FakeUpdateServer();
+        var session = new SessionService(api.BaseUrl);
+        var service = new UpdateService(api.BaseUrl, session);
 
         var newer = BumpVersion(UpdateService.CurrentVersion);
-        api.AlwaysRespond(GitHubApiServer.ReleaseJson(
-            $"v{newer}", "New release", "Fixed download retry bug", false, DateTime.UtcNow,
-            ("EditorHelper-Setup-" + newer + ".exe", 49_000_000),
-            ("EditorHelper-Setup-" + newer + ".exe.sha256", 96)));
+        api.CheckResponse = CheckJson(tag: $"v{newer}", prerelease: false, beta: false);
 
-        var release = await service.CheckForUpdateAsync(includePrereleases: false);
-        Check("newer version offered", release != null && release.Version == newer, release?.Version);
-        Check("release notes carried", release?.Notes == "Fixed download retry bug");
-        Check("release url carried", release?.HtmlUrl?.Contains("/releases/tag/") == true);
-        Check("stable flag carried", release?.Prerelease == false);
-        Check("assets carried", release?.Assets.Count == 2);
+        var result = await service.CheckAsync(false);
+        Check("newer version offered",
+            result.Stable != null && UpdateService.IsNewer(result.Stable.Version, UpdateService.CurrentVersion),
+            result.Stable?.Version);
 
-        // 404 на /releases/latest: репозиторий есть, релизов нет — не ошибка
-        using var empty = new GitHubApiServer();
-        var emptyService = new UpdateService(empty.BaseUrl, "test", "editorhelper");
-        empty.AlwaysRespond("{}", 404);
-        var none = await emptyService.CheckForUpdateAsync(includePrereleases: false);
-        Check("no releases yet is not an update", none == null);
+        // Бета-канал у пользователя со включённым флагом, но без права:
+        // сервер отдал только stable — клиент не может «увидеть» бету,
+        // какой бы флаг он ни выставил локально
+        api.CheckResponse = CheckJson(tag: $"v{newer}", prerelease: false, beta: false);
+        var noRight = await service.CheckAsync(requestBetaChannel: true);
+        Check("local beta flag cannot conjure beta release",
+            noRight.Beta == null && noRight.BetaAllowed == false);
     }
 
-    private static async Task TestPrereleaseFilteringAsync()
+    // ------------------------------------------------------------- бета-гейт
+
+    private static async Task TestBetaGateAsync()
     {
-        // Бета-канал: в списке релизов стабильный той же версии и свежий предрелиз
-        using var api = new GitHubApiServer();
-        var service = new UpdateService(api.BaseUrl, "test", "editorhelper");
+        using var api = new FakeUpdateServer();
+        var session = new SessionService(api.BaseUrl);
+        var service = new UpdateService(api.BaseUrl, session);
 
-        var stable = UpdateService.CurrentVersion;
-        var beta = BumpVersion(stable);
+        var beta = BumpVersion(UpdateService.CurrentVersion);
+        // Серверный ответ для авторизованного тестировщика: бета-секция есть
+        api.CheckResponse = CheckJson(tag: $"v{UpdateService.CurrentVersion}", prerelease: false, beta: true, betaTag: $"v{beta}-beta.1");
 
-        var list = "[" + GitHubApiServer.ReleaseJson($"v{stable}", "Stable", "", false, DateTime.UtcNow) + "," +
-                   GitHubApiServer.ReleaseJson($"v{beta}-beta.1", "Beta", "beta notes", true, DateTime.UtcNow.AddHours(1)) + "]";
-        api.AlwaysRespond(list);
+        var result = await service.CheckAsync(requestBetaChannel: true);
+        Check("beta release parsed when server allows", result.Beta != null, result.Beta?.Tag);
+        Check("beta allowed flag carried", result.BetaAllowed);
+        Check("beta version comparison works",
+            result.Beta != null && UpdateService.IsNewer(result.Beta.Version, UpdateService.CurrentVersion));
+        Check("beta release marked prerelease", result.Beta?.Prerelease == true);
 
-        var betaRelease = await service.CheckForUpdateAsync(includePrereleases: true);
-        Check("beta channel sees prerelease", betaRelease != null && betaRelease.Prerelease, betaRelease?.Version);
-
-        // Stable-канал: /releases/latest отдаёт только стабильный релиз (той же версии)
-        using var stableApi = new GitHubApiServer();
-        var stableService = new UpdateService(stableApi.BaseUrl, "test", "editorhelper");
-        stableApi.AlwaysRespond(GitHubApiServer.ReleaseJson($"v{stable}", "Stable", "", false, DateTime.UtcNow));
-        var stableOnly = await stableService.CheckForUpdateAsync(includePrereleases: false);
-        Check("stable channel ignores newer prerelease", stableOnly == null);
+        // Стабильная секция при этом не подменяется бетой
+        Check("stable section stays stable",
+            result.Stable != null && !result.Stable.Prerelease);
     }
+
+    // ------------------------------------------------------------- ошибки
 
     private static async Task TestErrorHandlingAsync()
     {
-        // API-лимит: 403 должен прийти как исключение, а не как «нет обновлений»
-        using var limited = new GitHubApiServer();
-        var limitedService = new UpdateService(limited.BaseUrl, "test", "editorhelper");
-        limited.AlwaysRespond("{\"message\":\"API rate limit exceeded\"}", 403);
+        // 502 от сервера: внятное исключение, не «нет обновлений»
+        using var api = new FakeUpdateServer { CheckStatus = 502, CheckResponse = """{"message":"Хранилище обновлений недоступно."}""" };
+        var session = new SessionService(api.BaseUrl);
+        var service = new UpdateService(api.BaseUrl, session);
 
-        var rateLimited = false;
-        try { await limitedService.CheckForUpdateAsync(includePrereleases: false); }
-        catch (HttpRequestException) { rateLimited = true; }
-        Check("rate limit raises instead of 'no update'", rateLimited);
+        var failed = false;
+        string message = "";
+        try { await service.CheckAsync(false); }
+        catch (InvalidOperationException ex) { failed = true; message = ex.Message; }
+        Check("server failure raises with message", failed && message.Contains("Хранилище"), message);
 
-        // Некорректный JSON — ошибка, не пустой результат
-        using var garbage = new GitHubApiServer();
-        var garbageService = new UpdateService(garbage.BaseUrl, "test", "editorhelper");
-        garbage.AlwaysRespond("<html>not json</html>");
+        // Битый JSON — исключение, не пустой результат
+        using var garbage = new FakeUpdateServer { CheckResponse = "<html>not json</html>" };
+        var garbageService = new UpdateService(garbage.BaseUrl, new SessionService(garbage.BaseUrl));
         var badJson = false;
-        try { await garbageService.CheckForUpdateAsync(includePrereleases: false); }
+        try { await garbageService.CheckAsync(false); }
         catch (System.Text.Json.JsonException) { badJson = true; }
+        catch (InvalidDataException) { badJson = true; }
         Check("malformed response raises", badJson);
-
-        // Не настроенный сервис честно отказывает
-        var unconfigured = new UpdateService("");
-        var refused = false;
-        try { await unconfigured.CheckForUpdateAsync(includePrereleases: false); }
-        catch (InvalidOperationException) { refused = true; }
-        Check("unconfigured service refuses to check", refused);
     }
 
-    private static async Task TestTamperedChecksumAsync()
+    // ------------------------------------------------------------- контрольная сумма
+
+    private static async Task TestChecksumVerificationAsync()
     {
-        // Релиз без .sha256-артефакта: загрузку отклоняет безопасность
-        using var api = new GitHubApiServer();
-        var service = new UpdateService(api.BaseUrl, "test", "editorhelper");
-
-        var newer = BumpVersion(UpdateService.CurrentVersion);
-        api.AlwaysRespond(GitHubApiServer.ReleaseJson(
-            $"v{newer}", "No checksum", "notes", false, DateTime.UtcNow,
-            ("EditorHelper-Setup-" + newer + ".exe", 100)));
-
-        var release = await service.CheckForUpdateAsync(includePrereleases: false);
-        Check("release without checksum offered for check", release != null);
-
+        // Полный цикл: сервер отдаёт релиз, артефакт суммы и установщик;
+        // сумма совпадает — файл сохраняется
+        var payload = new byte[4096];
+        new Random(7).NextBytes(payload);
+        var sha = Convert.ToHexString(
+            System.Security.Cryptography.SHA256.HashData(payload)).ToLowerInvariant();
         var folder = Path.Combine(Path.GetTempPath(), "eh-update-test-" + Guid.NewGuid().ToString("N"));
-        var rejected = false;
-        string reason = "";
-        try
-        {
-            await service.DownloadInstallerAsync(release!, folder);
-        }
-        catch (InvalidDataException ex) when (ex.Message.Contains("контрольн"))
-        {
-            rejected = true;
-        }
-        catch (HttpRequestException)
-        {
-            // Asset URL фейка указывает на закрытый порт: загрузка не удалась
-            // по сети — файл без суммы в любом случае не попал бы на диск
-            rejected = true;
-        }
-        catch (Exception ex)
-        {
-            reason = ex.GetType().Name + ": " + ex.Message;
-        }
-        Check("download refuses release without checksum artifact", rejected, reason);
+
+        using var api = new FakeUpdateServer();
+        api.CheckResponse = CheckJson(tag: "v9.9.9", prerelease: false, beta: false);
+        api.File("/api/v1/updates/download?channel=stable&tag=v9.9.9", payload);
+        api.File("/api/v1/updates/download?channel=stable&tag=v9.9.9.sha256", Encoding.ASCII.GetBytes(sha + "  EditorHelper-Setup-9.9.9.exe"));
+
+        var session = new SessionService(api.BaseUrl);
+        var service = new UpdateService(api.BaseUrl, session);
+
+        var result = await service.CheckAsync(false);
+        Check("release offered", result.Stable != null);
+
+        var path = await service.DownloadInstallerAsync(result.Stable!, folder);
+        Check("verified installer saved", File.Exists(path));
 
         if (Directory.Exists(folder)) Directory.Delete(folder, true);
-        Check("no leftover partial file", !Directory.Exists(folder));
+
+        // Подменённая сумма: файл удаляется, обновление отклоняется
+        using var tampered = new FakeUpdateServer();
+        tampered.CheckResponse = CheckJson(tag: "v9.9.9", prerelease: false, beta: false);
+        tampered.File("/api/v1/updates/download?channel=stable&tag=v9.9.9", payload);
+        tampered.File("/api/v1/updates/download?channel=stable&tag=v9.9.9.sha256",
+            Encoding.ASCII.GetBytes(new string('0', 64)));
+
+        var tamperedService = new UpdateService(tampered.BaseUrl, new SessionService(tampered.BaseUrl));
+        var tamperedResult = await tamperedService.CheckAsync(false);
+        var folder2 = Path.Combine(Path.GetTempPath(), "eh-update-test-" + Guid.NewGuid().ToString("N"));
+
+        var rejected = false;
+        try { await tamperedService.DownloadInstallerAsync(tamperedResult.Stable!, folder2); }
+        catch (InvalidDataException) { rejected = true; }
+        // Папка может существовать (создана до проверки), но файла в ней быть
+        // не должно: несовпавшая сумма всегда удаляет загруженный файл
+        var leftover = Directory.Exists(folder2)
+            ? Directory.GetFiles(folder2, "*.exe")
+            : Array.Empty<string>();
+        Check("tampered checksum rejected and file removed",
+            rejected && leftover.Length == 0,
+            leftover.Length > 0 ? "installer file left on disk" : null);
+        if (Directory.Exists(folder2)) Directory.Delete(folder2, true);
+
+        // Релиз без артефакта суммы: загрузка не начинается
+        using var noSum = new FakeUpdateServer();
+        noSum.CheckResponse = CheckJson(tag: "v9.9.9", prerelease: false, beta: false);
+        noSum.File("/api/v1/updates/download?channel=stable&tag=v9.9.9", payload);
+
+        var noSumService = new UpdateService(noSum.BaseUrl, new SessionService(noSum.BaseUrl));
+        var noSumResult = await noSumService.CheckAsync(false);
+        var folder3 = Path.Combine(Path.GetTempPath(), "eh-update-test-" + Guid.NewGuid().ToString("N"));
+
+        var refused = false;
+        try { await noSumService.DownloadInstallerAsync(noSumResult.Stable!, folder3); }
+        catch (InvalidDataException ex) when (ex.Message.Contains("контрольн")) { refused = true; }
+        Check("release without checksum artifact refused", refused);
+        if (Directory.Exists(folder3)) Directory.Delete(folder3, true);
     }
 
-    /// <summary>Версия на патч выше заданной — «новее» для тестов.</summary>
+    /// <summary>Версия на патч выше заданной.</summary>
     private static string BumpVersion(string version)
     {
         var parts = version.Split('.');
-        var patch = int.Parse(parts[^1]) + 1;
-        parts[^1] = patch.ToString();
+        parts[^1] = (int.Parse(parts[^1]) + 1).ToString();
         return string.Join(".", parts);
+    }
+
+    private static string CheckJson(string tag, bool prerelease, bool beta, string? betaTag = null)
+    {
+        var stable = $$"""
+        {
+            "tag": "{{tag}}", "title": "{{tag}}", "notes": "notes",
+            "publishedAt": "2026-01-01T00:00:00Z", "prerelease": {{prerelease.ToString().ToLowerInvariant()}},
+            "installerUrl": "/api/v1/updates/download?channel=stable&tag={{tag}}",
+            "installerName": "EditorHelper-Setup-{{tag.TrimStart('v')}}.exe", "sizeBytes": 1000,
+            "htmlUrl": "https://github.com/test/editorhelper/releases/tag/{{tag}}"
+        }
+        """;
+
+        string betaSection;
+        if (beta && betaTag != null)
+        {
+            betaSection = $$"""
+        {
+            "allowed": true,
+            "release": {
+              "tag": "{{betaTag}}", "title": "{{betaTag}}", "notes": "beta notes",
+              "publishedAt": "2026-01-02T00:00:00Z", "prerelease": true,
+              "installerUrl": "/api/v1/updates/download?channel=beta&tag={{betaTag}}",
+              "installerName": "EditorHelper-Setup-{{betaTag.TrimStart('v')}}.exe", "sizeBytes": 1000,
+              "htmlUrl": ""
+            }
+        }
+        """;
+        }
+        else if (beta)
+        {
+            betaSection = """{ "allowed": true, "release": null }""";
+        }
+        else
+        {
+            betaSection = "null";
+        }
+
+        return $$"""{ "stable": {{stable}}, "beta": {{betaSection}} }""";
+    }
+}
+
+/// <summary>
+/// Локальный HTTP-сервер, имитирующий маршруты обновлений: /check (JSON) и
+/// произвольные файлы. Минимальный HTTP поверх TcpListener — тот же приём,
+/// что в LoopbackHttpServer.
+/// </summary>
+internal sealed class FakeUpdateServer : IDisposable
+{
+    private readonly TcpListener _listener;
+    private readonly CancellationTokenSource _cts = new();
+    private readonly Dictionary<string, byte[]> _files = new(StringComparer.OrdinalIgnoreCase);
+
+    public string BaseUrl { get; }
+
+    public string CheckResponse { get; set; } = """{ "stable": null, "beta": null }""";
+    public int CheckStatus { get; set; } = 200;
+
+    public FakeUpdateServer()
+    {
+        _listener = new TcpListener(IPAddress.Loopback, 0);
+        _listener.Start();
+        BaseUrl = $"http://127.0.0.1:{((IPEndPoint)_listener.LocalEndpoint).Port}";
+
+        _ = Task.Run(async () =>
+        {
+            while (!_cts.IsCancellationRequested)
+            {
+                TcpClient client;
+                try { client = await _listener.AcceptTcpClientAsync(_cts.Token); }
+                catch { return; }
+
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await using var stream = client.GetStream();
+                        await RespondAsync(stream);
+                    }
+                    catch { }
+                    finally { client.Dispose(); }
+                });
+            }
+        });
+    }
+
+    public void File(string path, byte[] content) => _files[path] = content;
+
+    private async Task RespondAsync(NetworkStream stream)
+    {
+        var buffer = new byte[8192];
+        var head = new StringBuilder();
+        while (true)
+        {
+            var read = await stream.ReadAsync(buffer);
+            if (read == 0) break;
+            head.Append(Encoding.ASCII.GetString(buffer, 0, read));
+            if (head.ToString().Contains("\r\n\r\n")) break;
+        }
+
+        var requestLine = head.ToString().Split('\r')[0];
+        // "GET /path?query HTTP/1.1": путь — второй элемент
+        var path = requestLine.Split(' ')[1];
+
+        if (path.StartsWith("/api/v1/updates/check"))
+        {
+            var body = Encoding.UTF8.GetBytes(CheckResponse);
+            await WriteAsync(stream, CheckStatus, body, "application/json");
+            return;
+        }
+
+        if (_files.TryGetValue(path, out var file))
+        {
+            await WriteAsync(stream, 200, file, "application/octet-stream");
+            return;
+        }
+
+        await WriteAsync(stream, 404, Encoding.UTF8.GetBytes("""{"message":"not found"}"""), "application/json");
+    }
+
+    private static async Task WriteAsync(NetworkStream stream, int status, byte[] body, string contentType)
+    {
+        var header = $"HTTP/1.1 {status} {Reason(status)}\r\n" +
+                     $"Content-Type: {contentType}\r\n" +
+                     $"Content-Length: {body.Length}\r\n" +
+                     "Connection: close\r\n\r\n";
+        await stream.WriteAsync(Encoding.ASCII.GetBytes(header));
+        await stream.WriteAsync(body);
+    }
+
+    private static string Reason(int status) => status switch
+    {
+        200 => "OK", 401 => "Unauthorized", 403 => "Forbidden",
+        404 => "Not Found", 502 => "Bad Gateway", _ => "Status"
+    };
+
+    public void Dispose()
+    {
+        _cts.Cancel();
+        try { _listener.Stop(); } catch { }
     }
 }

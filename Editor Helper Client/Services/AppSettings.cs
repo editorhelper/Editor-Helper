@@ -31,17 +31,11 @@ public class AppSettings
     public bool EffectsEnabled { get; set; } = true;
 
     /// <summary>
-    /// Адрес GitHub-репозитория с релизами (https://github.com/owner/repo).
-    /// Пусто — обновления не настроены и раздел обновлений это сообщит.
+    /// Канал обновлений. Желание клиента: сервер всё равно не отдаст
+    /// бета-метаданные без права is_beta_tester, поэтому включённый флаг без
+    /// разрешения просто не даёт эффекта.
     /// </summary>
-    public string UpdateRepository { get; set; } = "";
-
-    /// <summary>
-    /// Канал обновлений: false — только стабильные релизы (по умолчанию),
-    /// true — ещё и предрелизы. Бета не распространяется всем: переключение
-    /// добровольное, в настройках.
-    /// </summary>
-    public bool UpdateIncludePrereleases { get; set; }
+    public bool UpdateBetaChannel { get; set; }
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {

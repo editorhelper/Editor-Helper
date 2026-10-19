@@ -56,6 +56,26 @@ public class ServerConfig
     public string ListenAddress { get; set; } = "127.0.0.1";
 
     /// <summary>
+    /// Публичный репозиторий со стабильными релизами (owner/repo или полный
+    /// адрес). Стабильные обновления доступны всем вошедшим пользователям.
+    /// </summary>
+    public string StableRepository { get; set; } = "";
+
+    /// <summary>
+    /// Приватный репозиторий с бета-релизами. Его артефакты недоступны
+    /// анонимно; сервер читает их по токену BetaRepositoryToken и раздаёт
+    /// только пользователям с флагом is_beta_tester.
+    /// </summary>
+    public string BetaRepository { get; set; } = "";
+
+    /// <summary>
+    /// GitHub-токен с правом чтения приватного бета-репозитория
+    /// (fine-grained, Contents: Read-only). Живёт только на сервере,
+    /// в клиент не попадает никогда.
+    /// </summary>
+    public string? BetaRepositoryToken { get; set; }
+
+    /// <summary>
     /// Ограничение частоты запросов по адресу клиента. Включено по умолчанию;
     /// отключается переменной окружения в тестовых сценариях, где один
     /// локальный адрес делает сотни запросов подряд.
@@ -109,6 +129,12 @@ public class ServerConfig
             PublicBaseUrl = Environment.GetEnvironmentVariable("EDITORHELPER_PUBLIC_URL")
         };
 
+        config.StableRepository = Environment.GetEnvironmentVariable("EDITORHELPER_STABLE_REPO") ?? "";
+        config.BetaRepository = Environment.GetEnvironmentVariable("EDITORHELPER_BETA_REPO") ?? "";
+        config.BetaRepositoryToken = string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("EDITORHELPER_BETA_REPO_TOKEN"))
+            ? null
+            : Environment.GetEnvironmentVariable("EDITORHELPER_BETA_REPO_TOKEN");
+
         if (int.TryParse(Environment.GetEnvironmentVariable("EDITORHELPER_PORT"), out var port))
             config.Port = port;
 
@@ -152,6 +178,15 @@ public class ServerConfig
                         config.AdminToken = fromFile.AdminToken ?? "";
                     config.PublicBaseUrl ??= fromFile.PublicBaseUrl;
                     if (fromFile.Port is > 0) config.Port = fromFile.Port.Value;
+                    config.StableRepository = string.IsNullOrWhiteSpace(config.StableRepository)
+                        ? fromFile.StableRepository ?? ""
+                        : config.StableRepository;
+                    config.BetaRepository = string.IsNullOrWhiteSpace(config.BetaRepository)
+                        ? fromFile.BetaRepository ?? ""
+                        : config.BetaRepository;
+                    config.BetaRepositoryToken ??= string.IsNullOrWhiteSpace(fromFile.BetaRepositoryToken)
+                        ? null
+                        : fromFile.BetaRepositoryToken;
                 }
             }
             catch
@@ -196,6 +231,9 @@ public class ServerConfig
         public string? TelegramBotUsername { get; set; }
         public string? AdminToken { get; set; }
         public string? PublicBaseUrl { get; set; }
+        public string? StableRepository { get; set; }
+        public string? BetaRepository { get; set; }
+        public string? BetaRepositoryToken { get; set; }
         public int? Port { get; set; }
     }
 

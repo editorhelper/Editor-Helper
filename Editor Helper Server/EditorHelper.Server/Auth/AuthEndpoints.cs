@@ -118,6 +118,18 @@ public static class AuthEndpoints
             var result = await store.ChangeRoleAsync(session.User.Id, id, role, ct);
             return result.Success ? Results.Ok(new { message = result.Message }) : Results.Json(new { message = result.Message }, statusCode: 403);
         });
+
+        // Бета-канал обновлений: выдача и отзыв доступа. Права проверяет
+        // IdentityStore по сессии актора, UI-скрытие защитой не является
+        users.MapPut("/{id:long}/beta", async (long id, BetaAccessInput input, HttpContext context, IdentityStore store, CancellationToken ct) =>
+        {
+            var session = await CurrentSessionAsync(context, store, ct);
+            if (session == null) return Results.Unauthorized();
+            var result = await store.ChangeBetaAccessAsync(session.User.Id, id, input.Allowed, ct);
+            return result.Success
+                ? Results.Ok(new { message = result.Message, allowed = input.Allowed })
+                : Results.Json(new { message = result.Message }, statusCode: 403);
+        });
         users.MapPut("/{id:long}/block", async (long id, BlockUserInput input, HttpContext context, IdentityStore store, CancellationToken ct) =>
         {
             var session = await CurrentSessionAsync(context, store, ct);
@@ -222,3 +234,4 @@ public sealed class DevelopmentLoginInput { public string DisplayName { get; set
 public sealed class DevelopmentLoginComplete { public string RequestId { get; set; } = ""; public string Code { get; set; } = ""; }
 public sealed class ChangeRoleInput { public string Role { get; set; } = ""; }
 public sealed class BlockUserInput { public bool Blocked { get; set; } }
+public sealed class BetaAccessInput { public bool Allowed { get; set; } }

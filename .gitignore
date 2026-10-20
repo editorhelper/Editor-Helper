@@ -4,13 +4,17 @@ obj/
 dist/
 TestOutput/
 
-# Релизные артефакты: воспроизводятся из кода, бинарники в git не нужны
-Release/payload/
-Release/publish/
-Release/output/
-Release/obfuscated/
-Release/_verify/
+# Релизные артефакты: воспроизводятся из кода, бинарники в git не нужны.
+# Путь с ** — потому что репозиторий кладёт клиент в подпапку "Editor Helper Client"
+**/Release/payload/
+**/Release/publish/
+**/Release/output/
+**/Release/obfuscated/
+**/Release/_verify/
 *.exe.sha256
+
+# Сгенерированная иконка: создаётся сборкой из avatar.png
+**/Resources/app.ico
 
 # Пользовательские данные клиента (появляются рядом с exe при портативном запуске)
 settings.json

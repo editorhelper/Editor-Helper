@@ -5,26 +5,20 @@ Thanks for your interest! A few ground rules keep this project healthy.
 ## Getting set up
 
 ```powershell
-git clone https://github.com/<owner>/editorhelper.git
-cd editorhelper/"Editor Helper Client"
+git clone https://github.com/editorhelper/Editor-Helper.git
+cd Editor-Helper/"Editor Helper Client"
 dotnet build EditorHelper.sln
 dotnet run --project tests/EditorHelper.Tests
 ```
 
-The server and its tests live in `Editor Helper Server/`; the Telegram bot
-source is linked into the server from `Editor Helper Telegram Bot/`. The
-three folders are one repository — server tests reference the client project
-by relative path.
+This repository contains the client application. The catalog server runs
+separately; the client tests are fully self-contained and need no server.
 
 ## Before you open a pull request
 
 1. **Build must be clean** — zero warnings, zero errors:
-   `dotnet build EditorHelper.sln` and
-   `dotnet build "Editor Helper Server/EditorHelper.Server.sln"`.
-2. **Tests must pass** — both suites, run locally:
-   `dotnet run --project tests/EditorHelper.Tests` (client) and
-   `dotnet run --project "Editor Helper Server/tests/EditorHelper.Server.Tests"`
-   (server).
+   `dotnet build EditorHelper.sln`.
+2. **Tests must pass**: `dotnet run --project tests/EditorHelper.Tests`.
 3. **Match the existing style.** The codebase uses Russian comments for
    non-obvious constraints and no comments for the obvious. WPF UI is built
    in code-behind with the shared design system (`Ui/Palette.cs`,

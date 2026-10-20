@@ -10,8 +10,6 @@ The reason this change is needed — a bug it fixes, a limitation it removes.
 
 - [ ] `dotnet build EditorHelper.sln` — clean, no warnings
 - [ ] `dotnet run --project tests/EditorHelper.Tests` — all pass
-- [ ] `dotnet build "EditorHelper Server/EditorHelper.Server.sln"` — clean (if server touched)
-- [ ] `dotnet run --project "Editor Helper Server/tests/EditorHelper.Server.Tests"` — all pass (if server touched)
 
 Describe what you actually tested beyond the suites, if anything.
 

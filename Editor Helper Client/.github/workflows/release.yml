@@ -47,9 +47,6 @@ jobs:
       - name: Client tests
         run: dotnet run --project tests/EditorHelper.Tests/EditorHelper.Tests.csproj --nologo
 
-      - name: Server tests
-        run: dotnet run --project "Editor Helper Server/tests/EditorHelper.Server.Tests/EditorHelper.Server.Tests.csproj" --nologo
-
       # Версия читается из csproj и сверяется с тегом: рассинхрон
       # дал бы релиз с установщиком не той версии
       - name: Verify tag matches project version

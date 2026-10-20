@@ -26,28 +26,17 @@ updates itself from GitHub Releases.
   or PowerShell files — installer-type resources get step-by-step manual
   instructions instead.
 - **Accounts via Telegram** — one-time-code login confirmed by a Telegram
-  bot; accounts are bound to a single device; three roles (User, VIP, Owner).
-- **Admin panel** — full CRUD for catalog cards, publishing workflow, banner
-  and archive uploads, Telegram channel storage — every action re-checks the
-  Owner role server-side.
+  bot; accounts are bound to a single device.
 - **Self-update from GitHub Releases** — checks for new versions, shows
   release notes, downloads the installer, verifies its SHA-256, then runs it.
   Stable and Beta channels.
 - **Zero secrets in the client** — bot tokens and admin credentials live on
   the server only; the client stores just a DPAPI-protected session token.
 
-## Project layout
-
-This repository contains three sibling projects:
-
-| Folder | What it is |
-|---|---|
-| `Editor Helper Client/` | WPF (.NET 8) desktop application — the app users install |
-| `Editor Helper Server/` | ASP.NET Core API: catalog, auth, admin, Telegram integration |
-| `Editor Helper Telegram Bot/` | Bot handlers (linked source compiled into the server) |
-
-The server is optional for trying the client: a local development catalog is
-bundled. In production the client talks to one server instance.
+> This repository contains the **client application**. The catalog server
+> (ASP.NET Core API with Telegram integration) runs separately and is not
+> part of this repo; the client works with any server implementing the API
+> contract below.
 
 ## Requirements
 
@@ -60,37 +49,14 @@ runtime needs to be preinstalled.
 ## Getting started
 
 ```powershell
-git clone https://github.com/<owner>/editorhelper.git
-cd editorhelper/"Editor Helper Client"
+git clone https://github.com/editorhelper/Editor-Helper.git
+cd Editor-Helper/"Editor Helper Client"
 dotnet run
 ```
 
-The app starts with the bundled demo catalog. To connect it to your own
-server, run the server (next section), then in the app: Settings → Remote
-Server → `http://127.0.0.1:5080`.
-
-## Running the server
-
-```powershell
-cd "Editor Helper Server"
-dotnet run --project EditorHelper.Server
-```
-
-The API listens on `http://127.0.0.1:5080`, the web admin panel is at
-`http://127.0.0.1:5080/admin`. On first start the server generates
-`server-data/admin-token.txt` — use that token to sign in to the admin panel.
-
-Optional integrations (see `Editor Helper Server/.env.example` for every
-setting):
-
-- **Telegram login & admin bot** — set `TELEGRAM_BOT_TOKEN` and
-  `EDITORHELPER_OWNER_TELEGRAM_ID`. One bot handles login confirmation, user
-  management and channel document discovery; the token stays on the server.
-- **Telegram channel as file storage** — set `TELEGRAM_CHANNEL_ID`; archives
-  posted in the channel are discovered by the bot and attachable to cards.
-
-> Keep the server on loopback for development. Production deployment needs
-> HTTPS, a public URL, and the development-login switches turned off.
+The app starts with the bundled demo catalog. To connect it to a server,
+run your server instance, then in the app: Settings → Remote Server →
+server API address.
 
 ## Building a release
 
@@ -108,16 +74,11 @@ verifies that no demo data, dev settings or debug files leak into the payload.
 ```powershell
 cd "Editor Helper Client"
 dotnet run --project tests/EditorHelper.Tests
-
-cd "Editor Helper Server"
-dotnet run --project tests/EditorHelper.Server.Tests
 ```
 
-Client suite: catalog loading, search, filters, error handling, downloads
-(retries, cancellation), checksums, installation rules, formatting, and the
-GitHub update flow against a fake releases API. Server suite: SSRF guard,
-auth challenges, roles, device binding, rate limiting, admin lifecycle,
-Telegram integration against a fake Bot API — no network access required.
+Catalog loading, search, filters, error handling, downloads (retries,
+cancellation), checksums, installation rules, formatting, and the update
+flow against a fake releases API — no network access required.
 
 ## How updates work
 
@@ -151,36 +112,37 @@ Beta channel: opt-in in Settings → Updates for users with server-granted
 access. Revoking access immediately stops new beta updates for that user;
 the app then offers a return to the latest stable release.
 
-Server configuration (environment variables or `server-data/secrets.json`):
+## Server API expected by the client
 
-| Variable | Meaning |
-|---|---|
-| `EDITORHELPER_STABLE_REPO` | `owner/repo` of the public stable releases |
-| `EDITORHELPER_BETA_REPO` | `owner/repo` of the private beta releases |
-| `EDITORHELPER_BETA_REPO_TOKEN` | fine-grained GitHub token, Contents: Read-only, scoped to the beta repo |
+```
+GET /api/v1/catalog                       -> { resources: [...] }
+GET /api/v1/resources/{id}                -> one resource
+GET /api/v1/resources/{id}/download       -> file stream
+GET /api/v1/health                        -> { ok, telegram }
+POST /api/v1/auth/telegram/start          -> login challenge
+GET  /api/v1/auth/telegram/status/{id}    -> challenge status
+POST /api/v1/auth/telegram/complete       -> session token
+GET /api/v1/updates/check?channel=…       -> stable/beta release metadata
+GET /api/v1/updates/download?channel=…&tag=… -> installer stream
+```
 
 ## Security
 
 - All privileged operations check the role on the **server**, on every
   request — the hidden UI is convenience, not protection.
-- SSRF protection on external file URLs (private ranges, link-local, CGNAT,
-  metadata IPs are rejected, including after redirects).
-- Rate limiting per route tier: catalog, auth completion, auth polling,
-  admin; request body size limits per endpoint class.
-- Session tokens are SHA-256-hashed server-side and DPAPI-protected on the
-  client. Device identity is a local random key; only its hash leaves the
-  machine.
+- Session tokens are DPAPI-protected on the client and hashed server-side.
+  Device identity is a local random key; only its hash leaves the machine.
 - The client never executes commands or scripts from release notes or
   remote metadata.
-- Beta update artifacts live in a **private** GitHub repository; the server
-  proxies them per-request with per-user authorization, so the read token
-  never enters the client and unauthorized users cannot fetch beta files
-  even with a direct URL.
+- Update integrity: SHA-256 checksum from the release, verified before
+  install; a failed check aborts and keeps the current version.
+- Beta artifacts live in a **private** repository; the server proxies them
+  per-request with per-user authorization, so the read token never enters
+  the client.
 
 See [SECURITY.md](SECURITY.md) for reporting vulnerabilities.
 
 ## License
 
 [MIT](LICENSE) — for the project code. Third-party dependencies
-(Microsoft .NET packages, Microsoft.Data.Sqlite) are under their own
-MIT-compatible licenses.
+(Microsoft .NET packages) are under their own MIT-compatible licenses.

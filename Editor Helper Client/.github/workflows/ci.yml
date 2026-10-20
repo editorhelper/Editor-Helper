@@ -26,29 +26,3 @@ jobs:
 
       - name: Tests
         run: dotnet run --project tests/EditorHelper.Tests/EditorHelper.Tests.csproj --nologo
-
-  server:
-    name: Server build & tests
-    runs-on: windows-latest
-    steps:
-      # Сервер и бот живут в соседних папках репозитория: без них
-      # linked source TelegramBotService.cs не найдётся
-      - uses: actions/checkout@v4
-        with:
-          # Проверяем весь репозиторий: серверные тесты ссылаются
-          # на ../Editor Helper Client/EditorHelper.csproj
-          sparse-checkout: |
-            Editor Helper Server
-            Editor Helper Client
-            Editor Helper Telegram Bot
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 8.0.x
-
-      - name: Build
-        run: dotnet build "Editor Helper Server/EditorHelper.Server.sln" -c Release --nologo
-
-      - name: Tests
-        run: dotnet run --project "Editor Helper Server/tests/EditorHelper.Server.Tests/EditorHelper.Server.Tests.csproj" --nologo

@@ -44,9 +44,6 @@ jobs:
       - name: Client tests
         run: dotnet run --project tests/EditorHelper.Tests/EditorHelper.Tests.csproj --nologo
 
-      - name: Server tests
-        run: dotnet run --project "Editor Helper Server/tests/EditorHelper.Server.Tests/EditorHelper.Server.Tests.csproj" --nologo
-
       - name: Verify tag matches project version
         shell: pwsh
         run: |

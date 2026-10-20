@@ -6,7 +6,7 @@ Thanks for your interest! A few ground rules keep this project healthy.
 
 ```powershell
 git clone https://github.com/editorhelper/Editor-Helper.git
-cd Editor-Helper/"Editor Helper Client"
+cd Editor-Helper
 dotnet build EditorHelper.sln
 dotnet run --project tests/EditorHelper.Tests
 ```

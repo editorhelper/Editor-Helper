@@ -50,7 +50,7 @@ runtime needs to be preinstalled.
 
 ```powershell
 git clone https://github.com/editorhelper/Editor-Helper.git
-cd Editor-Helper/"Editor Helper Client"
+cd Editor-Helper
 dotnet run
 ```
 
@@ -61,7 +61,7 @@ server API address.
 ## Building a release
 
 ```cmd
-cd "Editor Helper Client"
+cd Editor-Helper
 Release\publish.cmd                                  :: self-contained payload
 Release\installer.cmd                                 :: EditorHelper-Setup-x.y.z.exe
 ```
@@ -72,7 +72,7 @@ verifies that no demo data, dev settings or debug files leak into the payload.
 ## Testing
 
 ```powershell
-cd "Editor Helper Client"
+cd Editor-Helper
 dotnet run --project tests/EditorHelper.Tests
 ```
 

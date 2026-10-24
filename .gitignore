@@ -41,3 +41,4 @@ Thumbs.db
 # Сборочные артефакты кастомного установщика
 Release/setup/
 Release/build.log
+Release/*.log

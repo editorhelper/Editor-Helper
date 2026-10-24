@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Кастомный установщик Editor Helper в стиле Premium Cosmic.
+
+    Это самостоятельное WPF-приложение: свой безрамочный интерфейс, копирование
+    файлов, ярлыки, запись в реестр и собственный деинсталлятор — без Inno Setup
+    и его стандартного мастера.
+
+    Сборка два этапа:
+    1. dotnet publish этого проекта -> setup-файлы
+    2. Release\pack-installer.cmd пакует payload внутрь (Deflate) и выкатывает
+       один EditorHelper-Setup-<версия>.exe
+
+    Деинсталлятор компилируется тем же проектом (UninstallExe.exe рядом с
+    основным бинарником): один исходник, один стиль, два файла.
+  -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <AssemblyName>EditorHelperSetup</AssemblyName>
+    <RootNamespace>EditorHelper.Setup</RootNamespace>
+    <Version>0.5.0</Version>
+    <Product>Editor Helper Setup</Product>
+    <Company>Editor Helper</Company>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <ApplicationIcon>..\Resources\app.ico</ApplicationIcon>
+    <DebugType>none</DebugType>
+    <Deterministic>true</Deterministic>
+    <SelfContained>false</SelfContained>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Логотип: тот же avatar.png, что и в приложении -->
+    <Resource Include="..\Resources\avatar.png" Link="Resources\avatar.png" />
+  </ItemGroup>
+
+</Project>

@@ -37,3 +37,7 @@ updates/
 # ОС
 Thumbs.db
 .DS_Store
+
+# Сборочные артефакты кастомного установщика
+Release/setup/
+Release/build.log

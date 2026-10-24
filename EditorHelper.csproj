@@ -55,6 +55,11 @@
     <Compile Remove="tests\**" />
     <None Remove="tests\**" />
     <Page Remove="tests\**" />
+    <!-- Установщик — отдельный проект: его исходники не компилируются в приложение -->
+    <Compile Remove="EditorHelper.Setup\**" />
+    <None Remove="EditorHelper.Setup\**" />
+    <Page Remove="EditorHelper.Setup\**" />
+    <Resource Remove="EditorHelper.Setup\**" />
   </ItemGroup>
 
   <ItemGroup>

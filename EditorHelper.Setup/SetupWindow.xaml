@@ -1,0 +1,216 @@
+<Window x:Class="EditorHelper.Setup.SetupWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:ui="clr-namespace:EditorHelper.Setup.Ui"
+        Title="Editor Helper — установка"
+        Width="640" Height="480"
+        MinWidth="600" MinHeight="460"
+        WindowStartupLocation="CenterScreen"
+        WindowStyle="None"
+        ResizeMode="CanMinimize"
+        Background="{StaticResource BgPrimary}"
+        TextOptions.TextFormattingMode="Ideal"
+        UseLayoutRounding="True"
+        SnapsToDevicePixels="True">
+
+    <!-- Безрамочное окно, как у приложения: перетаскивание за верхнюю панель -->
+    <WindowChrome.WindowChrome>
+        <WindowChrome CaptionHeight="0"
+                      ResizeBorderThickness="0"
+                      GlassFrameThickness="0"
+                      CornerRadius="0"
+                      UseAeroCaptionButtons="False"/>
+    </WindowChrome.WindowChrome>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <!-- Живой космический фон: тот же визуальный слой, что в приложении -->
+        <ui:SpaceBackground x:Name="Space" Grid.RowSpan="2"/>
+
+        <!-- ======================= Top Bar ======================= -->
+        <Border Grid.Row="0"
+                Background="{StaticResource BgSecondary}"
+                BorderBrush="{StaticResource Divider}"
+                BorderThickness="0,0,0,1"
+                Padding="16,9"
+                MouseLeftButtonDown="TopBar_MouseLeftButtonDown">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center" Margin="4,0,0,0">
+                    <Border Width="28" Height="28" VerticalAlignment="Center">
+                        <Border.Effect>
+                            <DropShadowEffect Color="White" BlurRadius="14" ShadowDepth="0" Opacity="0.4"/>
+                        </Border.Effect>
+                        <ui:AvatarImage Source="pack://application:,,,/Resources/avatar.png"/>
+                    </Border>
+                    <StackPanel VerticalAlignment="Center" Margin="11,0,0,0">
+                        <TextBlock Text="EDITOR HELPER" FontSize="12" FontWeight="SemiBold" Foreground="{StaticResource TextPrimary}"/>
+                        <TextBlock Text="установка" FontSize="9" Foreground="{StaticResource TextMuted}" Margin="1,-1,0,0"/>
+                    </StackPanel>
+                </StackPanel>
+
+                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Button x:Name="MinimizeButton" Style="{StaticResource CaptionButton}" Content="&#xE921;" Click="MinimizeButton_Click" ToolTip="Свернуть"/>
+                    <Button x:Name="CloseButton" Style="{StaticResource CaptionButton}" Content="&#xE8BB;" Click="CloseButton_Click" ToolTip="Закрыть"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- ======================= Content ======================= -->
+        <Grid Grid.Row="1" Margin="28,24,28,22">
+            <!-- Шаг-индикатор: четыре точки этапа -->
+            <StackPanel x:Name="StepBar" Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,0,0,18"/>
+
+            <!-- Контейнер экранов -->
+            <Grid VerticalAlignment="Stretch">
+
+                <!-- ============ Экран 1: Welcome ============ -->
+                <Grid x:Name="WelcomeScreen" HorizontalAlignment="Center" VerticalAlignment="Center">
+                    <StackPanel HorizontalAlignment="Center">
+                        <!-- Орбитальная композиция: логотип в кольцах -->
+                        <Grid Width="120" Height="120" HorizontalAlignment="Center" Margin="0,0,0,18">
+                            <Ellipse Width="112" Height="112" Stroke="{StaticResource GlassBorder}" StrokeThickness="1" HorizontalAlignment="Center" VerticalAlignment="Center" Opacity="0.6"/>
+                            <Ellipse Width="86" Height="86" Stroke="{StaticResource GlassBorderBright}" StrokeThickness="1" HorizontalAlignment="Center" VerticalAlignment="Center" Opacity="0.5" StrokeDashArray="4 3"/>
+                            <Border Width="44" Height="44" HorizontalAlignment="Center" VerticalAlignment="Center">
+                                <Border.Effect>
+                                    <DropShadowEffect Color="White" BlurRadius="22" ShadowDepth="0" Opacity="0.5"/>
+                                </Border.Effect>
+                                <ui:AvatarImage Source="pack://application:,,,/Resources/avatar.png"/>
+                            </Border>
+                        </Grid>
+
+                        <TextBlock Text="Editor Helper" FontSize="30" FontWeight="Light" Foreground="{StaticResource TextPrimary}" HorizontalAlignment="Center"/>
+                        <TextBlock Text="Каталог инструментов для видеомонтажа и motion-дизайна"
+                                   FontSize="12.5" Foreground="{StaticResource TextSecondary}"
+                                   HorizontalAlignment="Center" TextAlignment="Center" Margin="0,10,0,0"/>
+
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,26,0,0">
+                            <Button x:Name="WelcomeInstallButton" Content="Установить" Style="{StaticResource PrimaryButton}" MinWidth="180" Click="WelcomeInstallButton_Click"/>
+                            <Button x:Name="WelcomeOptionsButton" Content="Настройки" Style="{StaticResource GlassButton}" Margin="12,0,0,0" Click="WelcomeOptionsButton_Click"/>
+                        </StackPanel>
+
+                        <TextBlock x:Name="VersionLabel"
+                                   FontSize="10.5" Foreground="{StaticResource TextMuted}"
+                                   HorizontalAlignment="Center" Margin="0,22,0,0"/>
+                    </StackPanel>
+                </Grid>
+
+                <!-- ============ Экран 2: Настройки ============ -->
+                <Grid x:Name="OptionsScreen" Visibility="Collapsed">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <TextBlock Text="Настройки установки" FontSize="22" FontWeight="Light" Foreground="{StaticResource TextPrimary}"/>
+                    <TextBlock Text="Папка установки и ярлыки" FontSize="12" Foreground="{StaticResource TextMuted}" Margin="0,6,0,0"/>
+
+                    <StackPanel Grid.Row="1" Margin="0,22,0,0">
+
+                        <!-- Папка установки -->
+                        <Border Background="{StaticResource CardSurface}" BorderBrush="{StaticResource CardBorderRest}" BorderThickness="1" CornerRadius="12" Padding="16" Margin="0,0,0,12">
+                            <StackPanel>
+                                <TextBlock Text="Папка установки" FontSize="13" FontWeight="SemiBold" Foreground="{StaticResource TextPrimary}"/>
+                                <Grid Margin="0,10,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBox x:Name="PathBox" Style="{StaticResource GlassTextBox}" TextChanged="PathBox_TextChanged"/>
+                                    <Button Grid.Column="1" Content="Обзор" Style="{StaticResource GlassButton}" Padding="14,8" Margin="10,0,0,0" Click="BrowseButton_Click"/>
+                                </Grid>
+                                <TextBlock x:Name="PathHint" FontSize="11" Foreground="{StaticResource TextMuted}" Margin="2,8,0,0" TextWrapping="Wrap"/>
+
+                                <!-- Обнаруженная предыдущая версия -->
+                                <Border x:Name="UpgradeNote" Background="{StaticResource Glass}" BorderBrush="{StaticResource GlassBorder}" BorderThickness="1" CornerRadius="8" Padding="10,7" Margin="0,12,0,0" Visibility="Collapsed">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="&#xE74E;" FontFamily="Segoe MDL2 Assets" FontSize="12" Foreground="{StaticResource TextSecondary}" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                        <TextBlock x:Name="UpgradeNoteText" FontSize="11.5" Foreground="{StaticResource TextSecondary}" TextWrapping="Wrap" VerticalAlignment="Center"/>
+                                    </StackPanel>
+                                </Border>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- Ярлыки -->
+                        <Border Background="{StaticResource CardSurface}" BorderBrush="{StaticResource CardBorderRest}" BorderThickness="1" CornerRadius="12" Padding="16" Margin="0,0,0,12">
+                            <StackPanel>
+                                <TextBlock Text="Ярлыки" FontSize="13" FontWeight="SemiBold" Foreground="{StaticResource TextPrimary}" Margin="0,0,0,10"/>
+                                <CheckBox x:Name="DesktopIconCheck" Style="{StaticResource ToggleSwitch}" Content="Ярлык на рабочем столе" Foreground="{StaticResource TextPrimary}" FontSize="12.5" IsChecked="True" Margin="0,0,0,10"/>
+                                <CheckBox x:Name="StartMenuIconCheck" Style="{StaticResource ToggleSwitch}" Content="Ярлык в меню «Пуск»" Foreground="{StaticResource TextPrimary}" FontSize="12.5" IsChecked="True"/>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+
+                    <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right">
+                        <Button Content="Назад" Style="{StaticResource GlassButton}" Click="BackButton_Click"/>
+                        <Button x:Name="OptionsInstallButton" Content="Установить" Style="{StaticResource PrimaryButton}" Margin="12,0,0,0" MinWidth="150" Click="OptionsInstallButton_Click"/>
+                    </StackPanel>
+                </Grid>
+
+                <!-- ============ Экран 3: Установка ============ -->
+                <Grid x:Name="ProgressScreen" Visibility="Collapsed">
+                    <StackPanel VerticalAlignment="Center" HorizontalAlignment="Stretch">
+                        <TextBlock x:Name="ProgressTitle" Text="Установка Editor Helper" FontSize="22" FontWeight="Light" Foreground="{StaticResource TextPrimary}" HorizontalAlignment="Center"/>
+                        <TextBlock x:Name="ProgressDetail" Text="Подготовка…" FontSize="12" Foreground="{StaticResource TextSecondary}" HorizontalAlignment="Center" Margin="0,8,0,0"/>
+
+                        <!-- Прогресс-бар: реальный, по байтам и файлам -->
+                        <Grid Margin="0,26,0,0">
+                            <Border Height="4" Background="{StaticResource GlassBorder}" CornerRadius="2" ClipToBounds="True">
+                                <Border x:Name="ProgressFill" Width="0" Background="{StaticResource AccentGradient}" CornerRadius="2" HorizontalAlignment="Left"/>
+                            </Border>
+                            <TextBlock x:Name="ProgressPercent" Text="0%" FontSize="11" Foreground="{StaticResource TextMuted}" HorizontalAlignment="Right" Margin="0,10,0,-14"/>
+                        </Grid>
+
+                        <TextBlock x:Name="ProgressFile" Text="" FontSize="10.5" Foreground="{StaticResource TextMuted}" HorizontalAlignment="Center" Margin="0,24,0,0" TextTrimming="CharacterEllipsis"/>
+
+                        <!-- Ошибка -->
+                        <Border x:Name="ErrorPanel" Background="#33FFFFFF" BorderBrush="{StaticResource GlassBorderBright}" BorderThickness="1" CornerRadius="10" Padding="14" Margin="0,20,0,0" Visibility="Collapsed">
+                            <StackPanel>
+                                <TextBlock Text="Установка не удалась" FontSize="13" FontWeight="SemiBold" Foreground="{StaticResource TextPrimary}" Margin="0,0,0,6"/>
+                                <TextBlock x:Name="ErrorText" FontSize="11.5" Foreground="{StaticResource TextSecondary}" TextWrapping="Wrap"/>
+                                <Button Content="Повторить" Style="{StaticResource GlassButton}" HorizontalAlignment="Left" Margin="0,12,0,0" Click="RetryButton_Click"/>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                </Grid>
+
+                <!-- ============ Экран 4: Завершение ============ -->
+                <Grid x:Name="DoneScreen" Visibility="Collapsed" HorizontalAlignment="Center" VerticalAlignment="Center">
+                    <StackPanel HorizontalAlignment="Center">
+                        <!-- Галочка в орбитальном кольце -->
+                        <Grid Width="104" Height="104" HorizontalAlignment="Center" Margin="0,0,0,16">
+                            <Ellipse Width="96" Height="96" Stroke="{StaticResource GlassBorder}" StrokeThickness="1" HorizontalAlignment="Center" VerticalAlignment="Center" Opacity="0.6"/>
+                            <Ellipse Width="72" Height="72" Stroke="{StaticResource GlassBorderBright}" StrokeThickness="1" HorizontalAlignment="Center" VerticalAlignment="Center" Opacity="0.5"/>
+                            <Path Data="M 30,52 L 43,65 L 66,38"
+                                  Stroke="#F2F2F2" StrokeThickness="5"
+                                  StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                  HorizontalAlignment="Center" VerticalAlignment="Center" Stretch="None">
+                                <Path.Effect>
+                                    <DropShadowEffect Color="White" BlurRadius="16" ShadowDepth="0" Opacity="0.35"/>
+                                </Path.Effect>
+                            </Path>
+                        </Grid>
+
+                        <TextBlock Text="Editor Helper установлен" FontSize="26" FontWeight="Light" Foreground="{StaticResource TextPrimary}" HorizontalAlignment="Center"/>
+                        <TextBlock x:Name="DoneVersionText" FontSize="12.5" Foreground="{StaticResource TextSecondary}" HorizontalAlignment="Center" Margin="0,10,0,0" TextAlignment="Center"/>
+
+                        <CheckBox x:Name="LaunchCheck" Style="{StaticResource ToggleSwitch}" Content="Запустить Editor Helper" Foreground="{StaticResource TextPrimary}" FontSize="12.5" IsChecked="True" HorizontalAlignment="Center" Margin="0,26,0,0"/>
+
+                        <Button Content="Завершить" Style="{StaticResource PrimaryButton}" MinWidth="170" HorizontalAlignment="Center" Margin="0,18,0,0" Click="FinishButton_Click"/>
+                    </StackPanel>
+                </Grid>
+
+            </Grid>
+        </Grid>
+    </Grid>
+</Window>

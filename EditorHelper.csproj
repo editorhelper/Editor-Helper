@@ -8,7 +8,7 @@
     <UseWPF>true</UseWPF>
     <AssemblyName>EditorHelper</AssemblyName>
     <RootNamespace>EditorHelper</RootNamespace>
-    <Version>0.5.1</Version>
+    <Version>0.5.2</Version>
     <Product>Editor Helper</Product>
     <Company>Editor Helper</Company>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
@@ -59,6 +59,10 @@
 
   <ItemGroup>
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
+    <!-- Тестовые наборы видят internal-хелперы сессии (SetSessionTokenForTests),
+         чтобы прогонять полный путь обновлений без реального входа через Telegram -->
+    <InternalsVisibleTo Include="EditorHelper.Tests" />
+    <InternalsVisibleTo Include="EditorHelper.Server.Tests" />
   </ItemGroup>
 
   <!--

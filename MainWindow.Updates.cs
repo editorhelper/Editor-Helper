@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.IO;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -33,14 +34,13 @@ public partial class MainWindow
     // ------------------------------------------------------------ Автопроверка
 
     private static readonly TimeSpan UpdateCheckInterval = TimeSpan.FromMinutes(60);
-    private static readonly TimeSpan UpdateCheckInitialDelay = TimeSpan.FromSeconds(45);
 
     private DispatcherTimer? _updateTimer;
     private string? _postponedUpdateVersion;
 
     /// <summary>
-    /// Запускает автоматическую проверку обновлений: первая — через минуту
-    /// после старта (не мешает вводу и анимации), далее — каждый час.
+    /// Запускает автоматическую проверку обновлений: первая — сразу после
+    /// старта (в фоне, интерфейс не блокируется), далее — каждый час.
     /// Вызывается из конструктора окна только при работе с сервером:
     /// локальный каталог не имеет источника обновлений.
     /// </summary>
@@ -48,16 +48,16 @@ public partial class MainWindow
     {
         if (_updateTimer != null) return;
 
+        // Первая проверка — сразу, но восстановление сессии ещё идёт параллельно
+        // (RestoreAccountAsync из конструктора): дождаться его, иначе сессия
+        // не восстановлена и проверка обновлений тихо уйдёт без авторизации
+        _ = CheckForUpdateOfferAsync(waitForSession: true);
+
         _updateTimer = new DispatcherTimer(DispatcherPriority.Background)
         {
-            Interval = UpdateCheckInitialDelay
+            Interval = UpdateCheckInterval
         };
-        _updateTimer.Tick += async (_, _) =>
-        {
-            // После первого срабатывания таймер переходит на часовой ритм
-            _updateTimer.Interval = UpdateCheckInterval;
-            await CheckForUpdateOfferAsync();
-        };
+        _updateTimer.Tick += async (_, _) => await CheckForUpdateOfferAsync();
         _updateTimer.Start();
     }
 
@@ -72,8 +72,18 @@ public partial class MainWindow
     /// окно предложения. Версия, отложенная кнопкой «Позже» в этом сеансе,
     /// повторно не предлагается до перезапуска приложения.
     /// </summary>
-    private async Task CheckForUpdateOfferAsync()
+    private async Task CheckForUpdateOfferAsync(bool waitForSession = false)
     {
+        if (waitForSession)
+        {
+            // Восстановление сессии идёт параллельно старту: без токена
+            // сервер ответит 401, и первая проверка потеряется. Ждём
+            // недолго — если вход так и не восстановился, проверка уйдёт
+            // тихо, как и раньше
+            for (int waited = 0; waited < 50 && _sessionService is not { IsAuthenticated: true }; waited++)
+                await Task.Delay(100);
+        }
+
         var service = CreateUpdateService();
         if (service == null) return;
 
@@ -88,11 +98,17 @@ public partial class MainWindow
                 candidate.Version == _postponedUpdateVersion)
                 return;
 
-            // Только UI-поток: DispatcherTimer тикает в нём, но await после
-            // проверки возвращается сюда же через контекст — страховка не лишняя
-            await Dispatcher.InvokeAsync(() =>
+            // Только UI-поток: первая проверка идёт параллельно старту окна,
+            // поэтому при необходимости ждём загрузки, а не отказываемся —
+            // иначе мгновенный ответ сети потерял бы окно до следующего часа
+            await Dispatcher.InvokeAsync(async () =>
             {
-                if (!IsLoaded || _updateBusy) return;
+                while (!IsLoaded)
+                {
+                    await Task.Delay(200);
+                    if (!IsAlive()) return;
+                }
+                if (_updateBusy) return;
 
                 var dialog = new UpdateDialog(candidate, service) { Owner = this };
                 var accepted = dialog.ShowDialog();
@@ -101,6 +117,8 @@ public partial class MainWindow
                 // часовая проверка не доставала тем же окном
                 if (accepted != true) _postponedUpdateVersion = candidate.Version;
             });
+
+            bool IsAlive() => IsLoaded || _updateTimer != null;
         }
         catch
         {

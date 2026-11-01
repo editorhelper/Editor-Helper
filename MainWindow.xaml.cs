@@ -1954,6 +1954,9 @@ public partial class MainWindow : Window
     {
         SourceBadgeText.Text = _catalogService.GetSourceName();
         SourceBadgeText.Foreground = _catalogService.IsRemote ? Palette.Accent : Palette.TextSecondary;
+        // Версия в верхней панели берётся из сборки: после обновления
+        // пользователь сразу видит новый номер без похода в настройки
+        VersionBadge.Text = "v" + Services.UpdateService.CurrentVersion;
     }
 
     // ---------------------------------------------------------------- Уведомления

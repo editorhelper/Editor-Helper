@@ -116,6 +116,18 @@ public sealed class SessionService
         if (!string.IsNullOrWhiteSpace(token)) request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
     }
 
+    private string? LoadToken()
+    {
+        try
+        {
+            if (!File.Exists(TokenFile)) return null;
+            var clear = ProtectedData.Unprotect(File.ReadAllBytes(TokenFile), null, DataProtectionScope.CurrentUser);
+            try { return Encoding.UTF8.GetString(clear); }
+            finally { CryptographicOperations.ZeroMemory(clear); }
+        }
+        catch { return null; }
+    }
+
     public async Task<SessionUser?> RestoreAsync(CancellationToken ct = default)
     {
         var token = LoadToken();
@@ -163,17 +175,6 @@ public sealed class SessionService
         var input = Encoding.UTF8.GetBytes(token);
         File.WriteAllBytes(TokenFile, ProtectedData.Protect(input, null, DataProtectionScope.CurrentUser));
         CryptographicOperations.ZeroMemory(input);
-    }
-    private static string? LoadToken()
-    {
-        try
-        {
-            if (!File.Exists(TokenFile)) return null;
-            var clear = ProtectedData.Unprotect(File.ReadAllBytes(TokenFile), null, DataProtectionScope.CurrentUser);
-            try { return Encoding.UTF8.GetString(clear); }
-            finally { CryptographicOperations.ZeroMemory(clear); }
-        }
-        catch { return null; }
     }
     private static void ClearToken() { try { if (File.Exists(TokenFile)) File.Delete(TokenFile); } catch { } }
 }

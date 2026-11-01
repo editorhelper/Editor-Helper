@@ -3,7 +3,8 @@ REM Builds the release payload: self-contained publish, ready to be packaged
 REM by the installer. No obfuscation - the client ships readable IL because the
 REM project is open source, and the client holds no secrets to protect.
 REM
-REM Output goes to Release\payload, which the installer packages.
+REM Output goes to Release\payload, which the installer in ..\..\Setup
+REM packages (see Setup\pack-installer.cmd).
 REM
 REM   publish.cmd                       -- release build for a local server
 REM   publish.cmd https://api.example.com
@@ -48,7 +49,7 @@ if exist "%PAYLOAD%\EditorHelper.pdb" goto :dev_file
 
 echo.
 echo  Done. Payload: %PAYLOAD%
-echo  Next: Release\installer.cmd
+echo  Next: ..\..\Setup\pack-installer.cmd
 echo.
 endlocal
 exit /b 0

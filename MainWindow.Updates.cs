@@ -3,8 +3,10 @@ using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using System.Windows.Threading;
 using EditorHelper.Services;
 using EditorHelper.Ui;
+using EditorHelper.Views;
 
 namespace EditorHelper;
 
@@ -17,8 +19,9 @@ namespace EditorHelper;
 /// бета-версий, ни их описаний — и не может включить бету локальной
 /// настройкой, потому что сервер просто не отдаст бета-метаданные.
 ///
-/// Проверка и загрузка не блокируют интерфейс. Установка — Inno Setup поверх
-/// закрытого приложения: установщик сам закрывает его и запускает заново.
+/// Проверка и загрузка не блокируют интерфейс. Установка — SFX-дистрибутив
+/// поверх закрытого приложения: установщик сам закрывает его (по процессу и
+/// пути установки), ставит файлы и запускает приложение заново.
 /// </summary>
 public partial class MainWindow
 {
@@ -26,6 +29,85 @@ public partial class MainWindow
     private CancellationTokenSource? _updateCts;
     private bool _updateBusy;
     private bool _betaAllowed;
+
+    // ------------------------------------------------------------ Автопроверка
+
+    private static readonly TimeSpan UpdateCheckInterval = TimeSpan.FromMinutes(60);
+    private static readonly TimeSpan UpdateCheckInitialDelay = TimeSpan.FromSeconds(45);
+
+    private DispatcherTimer? _updateTimer;
+    private string? _postponedUpdateVersion;
+
+    /// <summary>
+    /// Запускает автоматическую проверку обновлений: первая — через минуту
+    /// после старта (не мешает вводу и анимации), далее — каждый час.
+    /// Вызывается из конструктора окна только при работе с сервером:
+    /// локальный каталог не имеет источника обновлений.
+    /// </summary>
+    private void StartUpdateWatch()
+    {
+        if (_updateTimer != null) return;
+
+        _updateTimer = new DispatcherTimer(DispatcherPriority.Background)
+        {
+            Interval = UpdateCheckInitialDelay
+        };
+        _updateTimer.Tick += async (_, _) =>
+        {
+            // После первого срабатывания таймер переходит на часовой ритм
+            _updateTimer.Interval = UpdateCheckInterval;
+            await CheckForUpdateOfferAsync();
+        };
+        _updateTimer.Start();
+    }
+
+    private void StopUpdateWatch()
+    {
+        _updateTimer?.Stop();
+        _updateTimer = null;
+    }
+
+    /// <summary>
+    /// Тихая периодическая проверка: при новой версии показывает модальное
+    /// окно предложения. Версия, отложенная кнопкой «Позже» в этом сеансе,
+    /// повторно не предлагается до перезапуска приложения.
+    /// </summary>
+    private async Task CheckForUpdateOfferAsync()
+    {
+        var service = CreateUpdateService();
+        if (service == null) return;
+
+        try
+        {
+            var result = await service.CheckAsync(_settings.UpdateBetaChannel, CancellationToken.None);
+            var betaCandidate = _settings.UpdateBetaChannel && result.BetaAllowed ? result.Beta : null;
+            var candidate = betaCandidate ?? result.Stable;
+
+            if (candidate == null ||
+                !UpdateService.IsNewer(candidate.Version, UpdateService.CurrentVersion) ||
+                candidate.Version == _postponedUpdateVersion)
+                return;
+
+            // Только UI-поток: DispatcherTimer тикает в нём, но await после
+            // проверки возвращается сюда же через контекст — страховка не лишняя
+            await Dispatcher.InvokeAsync(() =>
+            {
+                if (!IsLoaded || _updateBusy) return;
+
+                var dialog = new UpdateDialog(candidate, service) { Owner = this };
+                var accepted = dialog.ShowDialog();
+
+                // «Позже»/закрытие: запоминаем до конца сеанса, чтобы
+                // часовая проверка не доставала тем же окном
+                if (accepted != true) _postponedUpdateVersion = candidate.Version;
+            });
+        }
+        catch
+        {
+            // Фоновая проверка молчит: недоступность сервера или GitHub —
+            // не событие для пользователя, ручная проверка покажет причину
+        }
+    }
 
     private UpdateService? CreateUpdateService() =>
         _sessionService is { IsAuthenticated: true } authed

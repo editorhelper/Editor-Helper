@@ -34,17 +34,16 @@ updates itself from GitHub Releases.
   the server only; the client stores just a DPAPI-protected session token.
 
 > This repository contains the **client application**. The catalog server
-> (ASP.NET Core API with Telegram integration) runs separately and is not
-> part of this repo; the client works with any server implementing the API
-> contract below.
+> (ASP.NET Core API with Telegram integration) and the installer sources
+> are maintained outside this repository; the client works with any server
+> implementing the API contract below.
 
 ## Requirements
 
 **Client:** Windows 10 or 11. The installer is self-contained — no .NET
 runtime needs to be preinstalled.
 
-**Building from source:** .NET SDK 8.0+, and
-[Inno Setup 6](https://jrsoftware.org/isinfo.php) for the installer.
+**Building from source:** .NET SDK 8.0+.
 
 ## Getting started
 
@@ -61,24 +60,14 @@ server API address.
 ## Building a release
 
 ```cmd
-cd Editor-Helper
 Release\publish.cmd                                  :: self-contained payload
-Release\installer.cmd                                 :: EditorHelper-Setup-x.y.z.exe
 ```
 
 `publish.cmd` accepts the default server API URL as an argument. The pipeline
 verifies that no demo data, dev settings or debug files leak into the payload.
-
-## Testing
-
-```powershell
-cd Editor-Helper
-dotnet run --project tests/EditorHelper.Tests
-```
-
-Catalog loading, search, filters, error handling, downloads (retries,
-cancellation), checksums, installation rules, formatting, and the update
-flow against a fake releases API — no network access required.
+The payload is packaged into the distributable installer outside this
+repository; the published release must attach `EditorHelper-Setup-x.y.z.exe`
+together with its `.sha256` checksum, or clients will not offer the update.
 
 ## How updates work
 
@@ -104,9 +93,9 @@ directly by the client:
    produced by the same CI run; the downloaded file is hashed and compared.
    A release without a checksum artifact is refused, and a mismatched hash
    deletes the file and aborts — the app keeps running the current version.
-6. **Install** — the verified installer is launched; Inno Setup closes the
-   running app, updates it, and offers to restart it. If anything fails
-   before that, the app stays on the current version untouched.
+6. **Install** — the verified installer is launched; the custom installer
+   closes the running app, updates it, and offers to restart it. If anything
+   fails before that, the app stays on the current version untouched.
 
 Beta channel: opt-in in Settings → Updates for users with server-granted
 access. Revoking access immediately stops new beta updates for that user;

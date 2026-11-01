@@ -73,6 +73,7 @@ public partial class MainWindow : Window
             SetActiveNavButton(FindNavButton(_activePage));
             LoadPage("Home");
             PlayIntro();
+            StartUpdateWatch();
         };
     }
 

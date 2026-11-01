@@ -127,6 +127,23 @@ public sealed class UpdateService
         if (string.IsNullOrWhiteSpace(release.InstallerName))
             throw new InvalidOperationException("Сервер не сообщил имя установщика.");
 
+        // Свободное место проверяется до загрузки: 160-мегабайтный установщик
+        // нельзя начинать качать, если на диске меньше 2× его заявленного объёма
+        // (установщик плюс распакованный payload во время установки)
+        var root = Path.GetPathRoot(Path.GetFullPath(destinationFolder));
+        if (!string.IsNullOrEmpty(root))
+        {
+            var drive = new DriveInfo(root);
+            if (drive.IsReady)
+            {
+                var needed = (release.SizeBytes > 0 ? release.SizeBytes : 0) * 2;
+                if (drive.AvailableFreeSpace < needed)
+                    throw new IOException(
+                        $"Недостаточно места на диске {root}: требуется ~{needed / 1024 / 1024} МБ, " +
+                        $"свободно {drive.AvailableFreeSpace / 1024 / 1024} МБ.");
+            }
+        }
+
         Directory.CreateDirectory(destinationFolder);
         var path = Path.Combine(destinationFolder, release.InstallerName);
 

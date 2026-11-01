@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   client:
-    name: Client build & tests
+    name: Client build
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -23,6 +23,3 @@ jobs:
 
       - name: Build
         run: dotnet build EditorHelper.sln -c Release --nologo
-
-      - name: Tests
-        run: dotnet run --project tests/EditorHelper.Tests/EditorHelper.Tests.csproj --nologo

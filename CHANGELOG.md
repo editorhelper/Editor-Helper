@@ -4,6 +4,30 @@ All notable changes to Editor Helper are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 semantic versioning.
 
+## [Unreleased]
+
+### Changed
+- Project layout: the installer is fully separated from the client. Installer
+  sources (`EditorHelper.Setup`, SFX stub, PackTool), the build script
+  (`pack-installer.cmd`), intermediate build files and the distributable
+  output now live in the sibling `Setup` folder; the client tree contains
+  only client sources and its payload publish. `pack-installer.cmd` reads the
+  client payload from `Editor Helper Client\Release\payload` by a relative
+  path, so no step of the process builds the installer inside the client
+  tree and the installer never ends up in the client payload.
+- CI and release workflows moved to the repository root and updated for the
+  new layout (`Editor Helper Client\...`, `Setup\...`).
+
+### Removed
+- Legacy Inno Setup script (`Release\installer.cmd`, referenced a
+  `setup.iss` that no longer exists) and the superseded PowerShell payload
+  packer (`Release\pack-payload.ps1`).
+- Installer sources and test suites are no longer part of the published
+  repository: they are maintained locally outside it. The published
+  repository contains the client application only; release workflow
+  automation was removed along with them — releases are attached to
+  GitHub Releases manually (installer exe + its `.sha256` checksum).
+
 ## [0.4.0] — 2026-10-20
 
 First public release with the self-update system.

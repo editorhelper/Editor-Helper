@@ -297,9 +297,21 @@ public partial class MainWindow
             var draft = _adminResources.Count(r => r.Status == "draft");
             var hidden = _adminResources.Count(r => r.Status == "hidden");
 
+            // Разбивка по типам повторяет разделы приложения: карточки не
+            // «пропадают» из админки, а распределяются по разделам Scripts,
+            // Plugins, Presets и остальным. Итог сводится к числу, которое
+            // видит пользователь в разделах.
+            var byType = _adminResources
+                .GroupBy(r => r.Type, StringComparer.OrdinalIgnoreCase)
+                .OrderBy(g => g.Key, StringComparer.OrdinalIgnoreCase)
+                .Select(g => $"{g.Count()} {TypeSectionLabel(g.Key)}")
+                .ToList();
+            var breakdown = string.Join(" + ", byType);
+
             _adminSummary.Text = _adminResources.Count == 0
                 ? "В каталоге пока нет карточек — создайте первую."
                 : $"Всего {_adminResources.Count} · опубликовано {published} · черновиков {draft} · скрыто {hidden}" +
+                  (byType.Count > 1 ? $" · по разделам: {breakdown}" : "") +
                   (filtered.Count != _adminResources.Count ? $" · в выборке {filtered.Count}" : "");
         }
 
@@ -617,6 +629,24 @@ public partial class MainWindow
         "http" => "Внешняя ссылка",
         "local" => string.IsNullOrWhiteSpace(source.LocalPath) ? "Без файла" : "Файл на сервере",
         _ => "Без файла"
+    };
+
+    /// <summary>
+    /// Название раздела приложения для типа карточки — как в боковой навигации.
+    /// Сводка админки ссылается на те же разделы, в которых пользователь видит
+    /// карточки, чтобы общее число не выглядело расхождением с разделами.
+    /// </summary>
+    private static string TypeSectionLabel(string type) => type?.ToLowerInvariant() switch
+    {
+        "script" => "скриптов",
+        "plugin" => "плагинов",
+        "preset" => "пресетов",
+        "overlay" => "оверлеев",
+        "sound" => "звуков",
+        "texture" => "текстур",
+        "template" => "шаблонов",
+        "extension" => "расширений",
+        _ => "прочих"
     };
 
     // ---------------------------------------------------------------- Действия
